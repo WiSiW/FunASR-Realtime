@@ -1,0 +1,25 @@
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+.venv/
+venv/
+dist/
+build/
+
+# Frontend
+frontend/node_modules/
+frontend/dist/
+.vite/
+
+# Runtime output
+wavs/
+out.txt
+*.log
+
+# Editors / OS
+.DS_Store
+.idea/
+.vscode/

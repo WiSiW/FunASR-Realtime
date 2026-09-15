@@ -1,0 +1,29 @@
+{
+  "name": "funasr-realtime-web",
+  "private": true,
+  "version": "0.2.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vue-tsc --noEmit && vite build",
+    "preview": "vite preview",
+    "typecheck": "vue-tsc --noEmit"
+  },
+  "dependencies": {
+    "vue": "3.5.42"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-vue": "6.0.9",
+    "typescript": "5.9.3",
+    "vite": "7.3.6",
+    "vue-tsc": "3.3.11"
+  },
+  "overrides": {
+    "@babel/parser": "7.26.3",
+    "@babel/types": "7.26.3",
+    "@babel/helper-validator-identifier": "7.25.9"
+  },
+  "engines": {
+    "node": ">=20.19.0"
+  }
+}

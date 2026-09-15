@@ -1,0 +1,33 @@
+services:
+  backend:
+    build:
+      context: ./backend
+      args:
+        PIP_INDEX_URL: "${PIP_INDEX_URL:-https://pypi.org/simple}"
+        PRELOAD_MODELS: "${PRELOAD_MODELS:-true}"
+    environment:
+      FUNASR_PRELOAD_MODELS: "${FUNASR_PRELOAD_MODELS:-offline,streaming}"
+      FUNASR_PRELOAD_STRICT: "${FUNASR_PRELOAD_STRICT:-true}"
+      FUNASR_MODEL_REVISION: "${FUNASR_MODEL_REVISION:-v2.0.4}"
+      MODELSCOPE_CACHE: /models/modelscope
+      HF_HOME: /models/huggingface
+    volumes:
+      - funasr-models:/models
+    expose:
+      - "8000"
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        NPM_REGISTRY: "${NPM_REGISTRY:-https://registry.npmjs.org}"
+    depends_on:
+      backend:
+        condition: service_healthy
+    ports:
+      - "${FRONTEND_PORT:-8080}:80"
+    restart: unless-stopped
+
+volumes:
+  funasr-models:

@@ -1,0 +1,1 @@
+"""FunASR realtime backend package."""

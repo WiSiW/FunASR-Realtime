@@ -58,7 +58,7 @@ class RecognitionSession:
         self._push_blocks = []
         self._push_samples = 0
         self._partial_text = ""
-        self.streaming = None
+        await self._close_streaming()
         self._last_level_sent = 0.0
         self.vad = EnergyVAD(
             sample_rate=options.sample_rate,
@@ -89,7 +89,7 @@ class RecognitionSession:
             await asyncio.to_thread(self.models.get_offline)
         else:
             streaming_model = await asyncio.to_thread(self.models.get_streaming)
-            self.streaming = streaming_model.new_session()
+            self.streaming = await asyncio.to_thread(streaming_model.new_session)
 
         self.active = True
         await self._send(
@@ -159,6 +159,7 @@ class RecognitionSession:
         else:
             await self._finish_streaming(flush_vad=True)
 
+        await self._close_streaming()
         self.active = False
         self._partial_text = ""
         await self._send_status("stopped")
@@ -173,18 +174,27 @@ class RecognitionSession:
     async def abort(self) -> None:
         """Release per-session state; cached models remain available."""
         self.active = False
-        self.streaming = None
+        await self._close_streaming()
         self.vad = None
         self._push_blocks = []
         self._push_samples = 0
         self._partial_text = ""
+
+    async def _close_streaming(self) -> None:
+        if self.streaming is None:
+            return
+        streaming = self.streaming
+        self.streaming = None
+        close = getattr(streaming, "close", None)
+        if close is not None:
+            await asyncio.to_thread(close)
 
     async def _transcribe_offline(self, audio: np.ndarray) -> None:
         self._segment_index += 1
         segment_id = f"seg-{self._segment_index:04d}"
         await self._send_status("processing")
         started = time.time()
-        model = self.models.get_offline()
+        model = await asyncio.to_thread(self.models.get_offline)
         text = await asyncio.to_thread(model.transcribe, audio)
         elapsed_ms = round((time.time() - started) * 1000)
         await self._send(

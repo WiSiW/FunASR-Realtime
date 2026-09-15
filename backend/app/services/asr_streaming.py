@@ -47,6 +47,10 @@ class StreamingDecodeSession:
         self._cache: dict = {}
         self._buffer = np.zeros(0, dtype=np.float32)
 
+    def close(self) -> None:
+        """Release per-session buffers; the shared model remains loaded."""
+        self.reset()
+
     @staticmethod
     def _extract(result) -> list[str]:
         texts: list[str] = []

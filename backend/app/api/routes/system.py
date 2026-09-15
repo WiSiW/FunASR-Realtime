@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+
 from fastapi import APIRouter, Request
 
 router = APIRouter(tags=["system"])
@@ -11,11 +13,12 @@ router = APIRouter(tags=["system"])
 async def health(request: Request) -> dict:
     models = request.app.state.models
     settings = request.app.state.settings
+    models_status = await asyncio.to_thread(models.status)
     return {
         "status": "ok",
         "service": settings.app_name,
         "preload_models": settings.preload_models,
-        "models": models.status(),
+        "models": models_status,
     }
 
 

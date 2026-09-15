@@ -15,6 +15,7 @@ from fastapi.staticfiles import StaticFiles
 from backend.app.api.routes import asr, system
 from backend.app.core.config import Settings
 from backend.app.core.logging import configure_logging
+from backend.app.services.model_daemon import RemoteModelRegistry, ensure_model_daemon
 from backend.app.services.model_registry import ModelRegistry
 
 logger = logging.getLogger(__name__)
@@ -25,25 +26,40 @@ async def lifespan(app: FastAPI):
     settings = Settings.from_env()
     configure_logging()
     app.state.settings = settings
-    registry = ModelRegistry(model_revision=settings.model_revision)
-    app.state.models = registry
 
-    if settings.preload_models:
-        logger.info(
-            "Preloading FunASR models before startup: %s",
-            ", ".join(settings.preload_models),
-        )
-        try:
-            await asyncio.to_thread(registry.preload, settings.preload_models)
+    def build_registry():
+        if settings.model_daemon_enabled:
+            client, daemon_started = ensure_model_daemon(settings)
+            registry = RemoteModelRegistry(client)
+            if settings.reload_models and not daemon_started:
+                logger.info("Reloading models in the persistent model daemon")
+                registry.reload(settings.preload_models, force=True)
+            registry.preload(settings.preload_models)
+            return registry
+
+        registry = ModelRegistry(model_revision=settings.model_revision)
+        if settings.preload_models:
+            logger.info(
+                "Preloading FunASR models before startup: %s",
+                ", ".join(settings.preload_models),
+            )
+            registry.preload(settings.preload_models)
             logger.info("FunASR model preloading completed")
-        except Exception:
-            logger.exception("FunASR model preloading failed")
-            if settings.preload_strict:
-                raise
-    else:
-        logger.warning(
-            "Model preloading is disabled; the first recognition request may load models"
-        )
+        else:
+            logger.warning(
+                "Model preloading is disabled; the first recognition request may load models"
+            )
+        return registry
+
+    try:
+        registry = await asyncio.to_thread(build_registry)
+    except Exception:
+        logger.exception("FunASR model initialization failed")
+        if settings.preload_strict:
+            raise
+        logger.warning("Falling back to lazy in-process model loading")
+        registry = ModelRegistry(model_revision=settings.model_revision)
+    app.state.models = registry
 
     logger.info("%s started", settings.app_name)
     yield

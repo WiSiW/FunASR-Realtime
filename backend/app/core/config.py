@@ -44,6 +44,16 @@ class Settings:
     max_push_sec: int = 120
     preload_models: tuple[str, ...] = ("offline", "streaming")
     preload_strict: bool = True
+    model_daemon_enabled: bool = True
+    model_daemon_autostart: bool = True
+    model_daemon_host: str = "127.0.0.1"
+    model_daemon_port: int = 8765
+    model_daemon_authkey: str = "funasr-realtime-model-daemon"
+    model_daemon_start_timeout: float = 600.0
+    model_daemon_session_ttl: float = 1800.0
+    model_daemon_max_workers: int = 8
+    model_daemon_log: str = "~/.cache/funasr-realtime/model-daemon.log"
+    reload_models: bool = False
 
     @classmethod
     def from_env(cls) -> Settings:
@@ -70,4 +80,32 @@ class Settings:
                 ",".join(cls.preload_models),
             ),
             preload_strict=_env_bool("FUNASR_PRELOAD_STRICT", cls.preload_strict),
+            model_daemon_enabled=_env_bool(
+                "FUNASR_MODEL_DAEMON", cls.model_daemon_enabled
+            ),
+            model_daemon_autostart=_env_bool(
+                "FUNASR_MODEL_DAEMON_AUTOSTART", cls.model_daemon_autostart
+            ),
+            model_daemon_host=os.getenv(
+                "FUNASR_MODEL_DAEMON_HOST", cls.model_daemon_host
+            ),
+            model_daemon_port=_env_int(
+                "FUNASR_MODEL_DAEMON_PORT", cls.model_daemon_port
+            ),
+            model_daemon_authkey=os.getenv(
+                "FUNASR_MODEL_DAEMON_AUTHKEY", cls.model_daemon_authkey
+            ),
+            model_daemon_start_timeout=_env_float(
+                "FUNASR_MODEL_DAEMON_START_TIMEOUT", cls.model_daemon_start_timeout
+            ),
+            model_daemon_session_ttl=_env_float(
+                "FUNASR_MODEL_DAEMON_SESSION_TTL", cls.model_daemon_session_ttl
+            ),
+            model_daemon_max_workers=_env_int(
+                "FUNASR_MODEL_DAEMON_MAX_WORKERS", cls.model_daemon_max_workers
+            ),
+            model_daemon_log=os.getenv(
+                "FUNASR_MODEL_DAEMON_LOG", cls.model_daemon_log
+            ),
+            reload_models=_env_bool("FUNASR_RELOAD_MODELS", cls.reload_models),
         )

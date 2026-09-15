@@ -1,22 +1,65 @@
+x-backend-build: &backend-build
+  context: ./backend
+  args:
+    PIP_INDEX_URL: "${PIP_INDEX_URL:-https://pypi.org/simple}"
+    PRELOAD_MODELS: "${PRELOAD_MODELS:-true}"
+
 services:
-  backend:
+  model-daemon:
+    image: funasr-realtime-backend:local
     build:
-      context: ./backend
-      args:
-        PIP_INDEX_URL: "${PIP_INDEX_URL:-https://pypi.org/simple}"
-        PRELOAD_MODELS: "${PRELOAD_MODELS:-true}"
+      <<: *backend-build
     environment:
       FUNASR_PRELOAD_MODELS: "${FUNASR_PRELOAD_MODELS:-offline,streaming}"
       FUNASR_PRELOAD_STRICT: "${FUNASR_PRELOAD_STRICT:-true}"
       FUNASR_MODEL_REVISION: "${FUNASR_MODEL_REVISION:-v2.0.4}"
       FUNASR_TORCH_NUM_THREADS: "${FUNASR_TORCH_NUM_THREADS:-2}"
       FUNASR_TORCH_INTEROP_THREADS: "${FUNASR_TORCH_INTEROP_THREADS:-1}"
+      FUNASR_MODEL_DAEMON_AUTHKEY: "${FUNASR_MODEL_DAEMON_AUTHKEY:-funasr-realtime-model-daemon}"
+      FUNASR_MODEL_DAEMON_SESSION_TTL: "${FUNASR_MODEL_DAEMON_SESSION_TTL:-1800}"
+      FUNASR_MODEL_DAEMON_MAX_WORKERS: "${FUNASR_MODEL_DAEMON_MAX_WORKERS:-8}"
+      MODELSCOPE_CACHE: /models/modelscope
+      HF_HOME: /models/huggingface
+    command:
+      - python
+      - -m
+      - backend.scripts.model_daemon
+      - --host
+      - 0.0.0.0
+      - --port
+      - "${FUNASR_MODEL_DAEMON_PORT:-8765}"
+    volumes:
+      - funasr-models:/models
+    expose:
+      - "${FUNASR_MODEL_DAEMON_PORT:-8765}"
+    restart: unless-stopped
+
+  backend:
+    image: funasr-realtime-backend:local
+    build:
+      <<: *backend-build
+    environment:
+      FUNASR_PRELOAD_MODELS: "${FUNASR_PRELOAD_MODELS:-offline,streaming}"
+      FUNASR_PRELOAD_STRICT: "${FUNASR_PRELOAD_STRICT:-true}"
+      FUNASR_MODEL_REVISION: "${FUNASR_MODEL_REVISION:-v2.0.4}"
+      FUNASR_TORCH_NUM_THREADS: "${FUNASR_TORCH_NUM_THREADS:-2}"
+      FUNASR_TORCH_INTEROP_THREADS: "${FUNASR_TORCH_INTEROP_THREADS:-1}"
+      FUNASR_MODEL_DAEMON: "on"
+      FUNASR_MODEL_DAEMON_AUTOSTART: "false"
+      FUNASR_MODEL_DAEMON_HOST: model-daemon
+      FUNASR_MODEL_DAEMON_PORT: "${FUNASR_MODEL_DAEMON_PORT:-8765}"
+      FUNASR_MODEL_DAEMON_AUTHKEY: "${FUNASR_MODEL_DAEMON_AUTHKEY:-funasr-realtime-model-daemon}"
+      FUNASR_MODEL_DAEMON_START_TIMEOUT: "${FUNASR_MODEL_DAEMON_START_TIMEOUT:-600}"
+      FUNASR_RELOAD_MODELS: "${FUNASR_RELOAD_MODELS:-false}"
       MODELSCOPE_CACHE: /models/modelscope
       HF_HOME: /models/huggingface
     volumes:
       - funasr-models:/models
     expose:
       - "8000"
+    depends_on:
+      model-daemon:
+        condition: service_started
     restart: unless-stopped
 
   frontend:

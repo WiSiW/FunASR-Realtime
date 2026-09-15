@@ -16,7 +16,7 @@
 - 实时音量、连接状态、分段编号、识别延迟和识别文本展示
 - 文本复制、清空、TXT 导出
 - 保留原命令行麦克风识别入口
-- 后端启动阶段预加载模型，不把首次加载延迟到识别请求
+- 独立常驻模型服务：模型只加载一次，API 重启后直接复用
 - 多客户端流式状态隔离、健康检查
 - 前后端独立 Dockerfile 和 Docker Compose 一键部署
 
@@ -121,9 +121,37 @@ Vite 会把 `/api`（包含 WebSocket）代理到 `http://127.0.0.1:8000`。需�
 
 前端展开“VAD 灵敏度”可调整 `auto` 和 `stream` 模式的能量阈值。环境安静时调低，噪声较大时调高。
 
-## 模型预加载
+## 模型常驻与预加载
 
-默认配置会在 FastAPI 生命周期启动、开始接收请求之前，依次加载：
+后端默认使用独立的常驻模型服务。模型只在第一次启动常驻服务时加载到内存；之后 API
+进程重启只会连接这个服务，不会再次加载权重。
+
+```bash
+# 启动 API；模型服务不存在时会自动在后台启动
+make dev-backend
+
+# 手动前台启动常驻模型服务（可选）
+make model-daemon
+
+# 显式重新加载常驻服务中的模型
+make model-daemon-reload
+
+# 启动 API 时强制重载常驻模型
+make dev-backend-reload-models
+
+# 停止常驻模型服务
+make model-daemon-stop
+```
+
+`make model-daemon-reload` 会重建模型对象，执行前请先停止正在进行的识别会话。
+
+需要回到旧的“模型跟随后端进程”模式时：
+
+```bash
+FUNASR_MODEL_DAEMON=off make dev-backend
+```
+
+`FUNASR_PRELOAD_MODELS` 控制常驻服务启动时预加载哪些模型：
 
 - `offline`：Paraformer-zh、FSMN-VAD 和 CT-Punc
 - `streaming`：paraformer-zh-streaming
@@ -133,18 +161,20 @@ FUNASR_PRELOAD_MODELS=offline,streaming
 FUNASR_PRELOAD_STRICT=true
 ```
 
-- `FUNASR_PRELOAD_STRICT=true` 时，任一模型加载失败都会阻止后端启动。
-- 设置为空字符串可关闭预加载，但识别模式会退回首次请求懒加载。
-- 模型文件缓存默认由 ModelScope 管理；后续重启直接读取本地缓存，不会重新下载模型。
-- 模型参数仍需要在每次后端启动时载入内存，这是 FunASR 运行模型所必需的。
+- 设置为空字符串时，首次识别请求再懒加载；加载后常驻服务会一直复用。
+- `FUNASR_PRELOAD_STRICT=true` 时，任一模型加载失败都会阻止常驻服务启动。
+- 模型文件缓存默认由 ModelScope 管理，只有文件缺失时才需要重新下载。
+- 常驻服务默认监听 `127.0.0.1:8765`，日志默认在
+  `~/.cache/funasr-realtime/model-daemon.log`。
 
 ## Docker 打包部署
 
-后端和前端分别使用独立 Dockerfile：
+后端、常驻模型服务和前端分别使用独立容器：
 
 - `backend/Dockerfile`：Python/FunASR 运行环境，可选在构建镜像时下载并固化模型缓存。
+- `model-daemon`：常驻模型容器，API 容器重启不会重新加载模型。
 - `frontend/Dockerfile`：Node 多阶段构建 Vue 静态文件，由 Nginx 托管并反向代理 WebSocket。
-- `docker-compose.yml`：编排前后端、模型持久卷和健康检查。
+- `docker-compose.yml`：编排前后端、模型服务、模型持久卷和健康检查。
 
 一键构建和启动：
 
@@ -164,6 +194,12 @@ docker compose up -d
 - `docker compose down` 不会删除模型。
 - `docker compose down -v` 会删除模型卷，下次启动需要重新下载。
 - 如果镜像构建时选择 `PRELOAD_MODELS=false`，首次容器启动时会下载模型到持久卷。
+
+重启 API 容器不会重新加载模型；需要重新加载时重启模型服务容器：
+
+```bash
+make docker-reload-models
+```
 
 使用国内镜像源构建：
 
@@ -253,11 +289,24 @@ make build      # 前端生产构建
 | `FUNASR_TORCH_INTEROP_THREADS` | `1` | PyTorch 算子间并行线程数，推理场景通常设为 1 |
 | `FUNASR_PRELOAD_MODELS` | `offline,streaming` | 后端启动前预加载的模型 |
 | `FUNASR_PRELOAD_STRICT` | `true` | 预加载失败时是否阻止服务启动 |
+| `FUNASR_MODEL_DAEMON` | `on` | 是否使用独立常驻模型服务 |
+| `FUNASR_MODEL_DAEMON_AUTOSTART` | `true` | 本地模式是否自动启动常驻服务 |
+| `FUNASR_MODEL_DAEMON_HOST` | `127.0.0.1` | 常驻服务监听地址 |
+| `FUNASR_MODEL_DAEMON_PORT` | `8765` | 常驻服务监听端口 |
+| `FUNASR_MODEL_DAEMON_AUTHKEY` | `funasr-realtime-model-daemon` | 本地连接认证密钥 |
+| `FUNASR_MODEL_DAEMON_START_TIMEOUT` | `600` | 首次启动等待模型加载的超时秒数 |
+| `FUNASR_MODEL_DAEMON_SESSION_TTL` | `1800` | 无主流式会话自动清理秒数 |
+| `FUNASR_RELOAD_MODELS` | `false` | API 启动时是否强制重载常驻模型 |
 
 ## 排查
 
 - 无法打开麦克风：确认使用 `localhost` 或 HTTPS，并检查浏览器站点权限。
-- 一直停留在“加载模型”：首次运行正在下载模型，查看后端终端日志。
+- 一直停留在“加载模型”：首次运行正在下载/载入模型，查看
+  `~/.cache/funasr-realtime/model-daemon.log`。
+- API 每次启动都重新加载模型：确认 `FUNASR_MODEL_DAEMON=on`，并且两次 API
+  启动之间没有执行 `make model-daemon-stop` 或重启 Docker 的 `model-daemon` 容器。
+- 需要重新加载模型：执行 `make model-daemon-reload`，或使用
+  `make dev-backend-reload-models` 启动 API。
 - 有音量但没有结果：调低 VAD 阈值，或换用“按键说话”模式验证识别链路。
 - 识别时浏览器或系统卡顿：默认已把 PyTorch 限制为 2 个推理线程；仍卡顿时可把
   `FUNASR_TORCH_NUM_THREADS` 调到 `1`，并将识别模式切换为“实时流式”以降低单次计算量。

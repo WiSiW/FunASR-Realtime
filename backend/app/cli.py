@@ -24,7 +24,7 @@ import logging
 import numpy as np
 
 from backend.app.services.asr import ASR
-from backend.app.services.asr_streaming import StreamingASR
+from backend.app.services.asr_streaming import StreamingASR, merge_stream_text
 from backend.app.services.mic_recorder import MicRecorder, RecorderConfig
 from backend.app.services.output import Output
 
@@ -132,14 +132,15 @@ def run_stream(stream_asr: StreamingASR, recorder: MicRecorder, out: Output) -> 
     asr_buf = np.zeros(0, dtype=np.float32)  # 待增量解码的缓冲
     utter = np.zeros(0, dtype=np.float32)  # 整句音频（用于存 wav）
     silence_count = 0
-    last_text = ""  # feed() 累计的最新文本，落盘用
+    last_text = ""  # 已解码文本累计，落盘用
 
     def flush_utter() -> None:
-        """句末：finalize 取最终文本，回退 last_text，落盘并重置。"""
+        """句末：把 finalize 的尾部增量并入累计文本，落盘并重置。"""
         nonlocal in_speech, asr_buf, utter, silence_count, last_text
         final_texts = stream_asr.finalize()
-        # 优先用 finalize 结果，为空则回退到增量解码累计的文本，避免落盘空内容
-        text = (final_texts[-1] if final_texts and final_texts[-1] else "") or last_text
+        for piece in final_texts:
+            last_text = merge_stream_text(last_text, piece)
+        text = last_text
         print(f"\r>>> {text}" + " " * 10, end="", flush=True)
         print()
         if len(utter) >= min_speech_samples:
@@ -187,7 +188,8 @@ def run_stream(stream_asr: StreamingASR, recorder: MicRecorder, out: Output) -> 
                 asr_buf = asr_buf[chunk_stride:]
                 partials = stream_asr.feed(chunk)
                 if partials:
-                    last_text = partials[-1]  # 累计文本，越说越长
+                    for piece in partials:
+                        last_text = merge_stream_text(last_text, piece)
                     print(f"\r>>> {last_text}", end="", flush=True)
     except KeyboardInterrupt:
         # 退出时若有未保存的语音，一并落盘

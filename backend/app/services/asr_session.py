@@ -17,7 +17,7 @@ from backend.app.api.protocol import (
     event,
 )
 from backend.app.core.config import Settings
-from backend.app.services.asr_streaming import StreamingDecodeSession
+from backend.app.services.asr_streaming import StreamingDecodeSession, merge_stream_text
 from backend.app.services.audio_vad import EnergyVAD, rms_energy
 from backend.app.services.model_registry import ModelRegistry
 
@@ -217,17 +217,20 @@ class RecognitionSession:
             raise RuntimeError("流式识别会话未初始化")
         partials = await asyncio.to_thread(self.streaming.feed, audio)
         if partials:
-            self._partial_text = partials[-1]
-            await self._send(
-                event(
-                    "partial",
-                    data={
-                        "session_id": self.session_id,
-                        "segment_id": f"seg-{self._segment_index + 1:04d}",
-                        "text": self._partial_text,
-                    },
+            previous_text = self._partial_text
+            for piece in partials:
+                self._partial_text = merge_stream_text(self._partial_text, piece)
+            if self._partial_text and self._partial_text != previous_text:
+                await self._send(
+                    event(
+                        "partial",
+                        data={
+                            "session_id": self.session_id,
+                            "segment_id": f"seg-{self._segment_index + 1:04d}",
+                            "text": self._partial_text,
+                        },
+                    )
                 )
-            )
 
         if update.speech_ended:
             await self._finish_streaming(flush_vad=False)
@@ -241,7 +244,9 @@ class RecognitionSession:
             self.vad.flush()
 
         final_parts = await asyncio.to_thread(self.streaming.finalize)
-        text = (final_parts[-1] if final_parts else "") or self._partial_text
+        for piece in final_parts:
+            self._partial_text = merge_stream_text(self._partial_text, piece)
+        text = self._partial_text.strip()
         if text:
             self._segment_index += 1
             await self._send(

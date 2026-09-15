@@ -13,6 +13,8 @@ import threading
 
 import numpy as np
 
+from backend.app.core.performance import configure_inference_threads
+
 logger = logging.getLogger(__name__)
 
 # 离线中文识别 + VAD + 标点（model_revision 固定以保证可复现）
@@ -30,15 +32,27 @@ class ASR:
     """加载并运行 FunASR 模型。"""
 
     def __init__(self, model_revision: str = "v2.0.4"):
+        inference_threads = configure_inference_threads()
         from funasr import AutoModel  # 延迟导入，避免加载耗时阻塞模块导入
 
         logger.info("正在加载 FunASR 模型（首次会自动下载，请耐心等待）...")
-        model_kwargs = {**_MODEL_KWARGS, "model_revision": model_revision}
+        model_kwargs = {
+            **_MODEL_KWARGS,
+            "model_revision": model_revision,
+            "disable_update": True,
+            "ncpu": inference_threads,
+        }
         self.model = AutoModel(**model_kwargs)
         self._inference_lock = threading.Lock()
         logger.info("模型加载完成。")
 
-    def transcribe(self, audio: np.ndarray, sr: int = 16000) -> str:
+    def transcribe(
+        self,
+        audio: np.ndarray,
+        sr: int = 16000,
+        *,
+        show_progress: bool = False,
+    ) -> str:
         """识别一段 16kHz 单声道 float32 音频，返回文本。
 
         参数
@@ -59,7 +73,7 @@ class ASR:
                 input=audio,
                 fs=sr,
                 batch_size_s=300,
-                disable_pbar=False,
+                disable_pbar=not show_progress,
             )
         # res 为 list[dict]，每个 dict 含 "text" 字段
         texts = [r.get("text", "") for r in res if r.get("text")]

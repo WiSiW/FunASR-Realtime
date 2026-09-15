@@ -50,9 +50,14 @@ function downloadAll(): void {
 
     <div class="transcript-body" aria-live="polite">
       <template v-if="finals.length || partial">
-        <article v-for="item in finals" :key="item.id" class="transcript-line">
+        <article
+          v-for="(item, index) in finals"
+          :key="item.id"
+          v-memo="[item.text, item.latencyMs, index]"
+          class="transcript-line"
+        >
           <span class="transcript-line__index">
-            {{ String(finals.indexOf(item) + 1).padStart(2, '0') }}
+            {{ String(index + 1).padStart(2, '0') }}
           </span>
           <p>{{ item.text }}</p>
           <span v-if="item.latencyMs" class="transcript-line__latency">

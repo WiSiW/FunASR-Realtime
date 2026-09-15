@@ -6,6 +6,11 @@ interface MicrophoneCallbacks {
   onLevel: (level: number) => void
 }
 
+interface PcmCaptureMessage {
+  samples: Float32Array
+  level: number
+}
+
 export function useMicrophone() {
   const capturing = ref(false)
   const level = ref(0)
@@ -44,7 +49,9 @@ export function useMicrophone() {
       await audioContext.resume()
 
       sourceNode = audioContext.createMediaStreamSource(mediaStream)
-      workletNode = new AudioWorkletNode(audioContext, 'pcm-capture')
+      workletNode = new AudioWorkletNode(audioContext, 'pcm-capture', {
+        processorOptions: { chunkDurationMs: 160 },
+      })
       silentGain = audioContext.createGain()
       silentGain.gain.value = 0
 
@@ -53,9 +60,11 @@ export function useMicrophone() {
         16000,
       )
 
-      workletNode.port.onmessage = (event: MessageEvent<Float32Array>) => {
-        const samples = event.data
-        const currentLevel = calculateRms(samples)
+      workletNode.port.onmessage = (event: MessageEvent<PcmCaptureMessage>) => {
+        const { samples, level: currentLevel } = event.data
+        if (samples.length === 0) {
+          return
+        }
         level.value = currentLevel
         callbacks.onLevel(currentLevel)
         const pcm = resampler.process(samples)
@@ -101,17 +110,6 @@ export function useMicrophone() {
   })
 
   return { capturing, level, error, start, stop }
-}
-
-function calculateRms(samples: Float32Array): number {
-  if (samples.length === 0) {
-    return 0
-  }
-  let sum = 0
-  for (const sample of samples) {
-    sum += sample * sample
-  }
-  return Math.min(1, Math.sqrt(sum / samples.length) * 3)
 }
 
 function normalizeMicrophoneError(message: string): string {

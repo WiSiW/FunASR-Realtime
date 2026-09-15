@@ -249,6 +249,8 @@ make build      # 前端生产构建
 | `FUNASR_VAD_MIN_SPEECH_SEC` | `0.25` | 最短有效语音 |
 | `FUNASR_VAD_MAX_SPEECH_SEC` | `30` | 单句最长语音 |
 | `FUNASR_MAX_PUSH_SEC` | `120` | 按键模式单次最长录音 |
+| `FUNASR_TORCH_NUM_THREADS` | `2` | PyTorch CPU 推理线程数；调低可优先保证 UI 流畅 |
+| `FUNASR_TORCH_INTEROP_THREADS` | `1` | PyTorch 算子间并行线程数，推理场景通常设为 1 |
 | `FUNASR_PRELOAD_MODELS` | `offline,streaming` | 后端启动前预加载的模型 |
 | `FUNASR_PRELOAD_STRICT` | `true` | 预加载失败时是否阻止服务启动 |
 
@@ -257,6 +259,8 @@ make build      # 前端生产构建
 - 无法打开麦克风：确认使用 `localhost` 或 HTTPS，并检查浏览器站点权限。
 - 一直停留在“加载模型”：首次运行正在下载模型，查看后端终端日志。
 - 有音量但没有结果：调低 VAD 阈值，或换用“按键说话”模式验证识别链路。
+- 识别时浏览器或系统卡顿：默认已把 PyTorch 限制为 2 个推理线程；仍卡顿时可把
+  `FUNASR_TORCH_NUM_THREADS` 调到 `1`，并将识别模式切换为“实时流式”以降低单次计算量。
 - WebSocket 连接失败：确认后端运行在 `8000` 端口，且代理的 WebSocket 转发已开启。
 - WebSocket 经常断开：检查 Nginx/网关的 WebSocket 空闲超时，连接路径至少设置
   `proxy_read_timeout 3600s`、`proxy_send_timeout 3600s`，并关闭代理缓冲。

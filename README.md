@@ -1,5 +1,6 @@
 # FunASR Realtime · 浏览器实时语音识别
 
+![](./default.png)
 基于 FunASR 的全栈语音识别项目。浏览器负责麦克风采集和 16kHz PCM 转换，通过 WebSocket 与 FastAPI 后端保持长连接；后端按所选模式执行自动分段、实时流式或按键说话识别。
 
 ## 功能

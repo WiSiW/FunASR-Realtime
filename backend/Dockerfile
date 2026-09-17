@@ -23,8 +23,8 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 
 RUN useradd --create-home --uid 1000 app \
-    && mkdir -p /models /model-cache \
-    && chown -R app:app /app /models /model-cache
+    && mkdir -p /models /model-cache /data \
+    && chown -R app:app /app /models /model-cache /data
 
 COPY --chown=app:app pyproject.toml ./
 COPY --chown=app:app backend ./backend

@@ -2,6 +2,7 @@
 import { computed } from 'vue'
 import AudioMeter from './components/AudioMeter.vue'
 import ModeSelector from './components/ModeSelector.vue'
+import SpeakerLibrary from './components/SpeakerLibrary.vue'
 import TranscriptPanel from './components/TranscriptPanel.vue'
 import { useAsrSession } from './composables/useAsrSession'
 
@@ -13,6 +14,8 @@ const {
   finals,
   partial,
   energyThreshold,
+  speakerEnabled,
+  sessionAudioId,
   active,
   busy,
   start,
@@ -45,6 +48,10 @@ const actionLabel = computed(() => {
   if (active.value) return mode.value === 'push' ? '结束并识别' : '停止识别'
   return '开始识别'
 })
+
+function audioUrl(audioId: string): string {
+  return `/api/v1/asr/audio/${encodeURIComponent(audioId)}`
+}
 </script>
 
 <template>
@@ -104,7 +111,7 @@ const actionLabel = computed(() => {
         </div>
 
         <details class="advanced-panel">
-          <summary>VAD 灵敏度</summary>
+          <summary>识别设置</summary>
           <label>
             <span>
               能量阈值
@@ -120,7 +127,25 @@ const actionLabel = computed(() => {
             />
             <output>{{ energyThreshold.toFixed(3) }}</output>
           </label>
+          <label class="check-row">
+            <span>
+              说话人识别
+              <small>使用 speaker_01、speaker_02… 标记当前说话人</small>
+            </span>
+            <input
+              v-model="speakerEnabled"
+              type="checkbox"
+              :disabled="active || busy"
+            />
+          </label>
         </details>
+
+        <SpeakerLibrary :disabled="active || busy" />
+
+        <div v-if="sessionAudioId && !active && !busy" class="session-audio">
+          <span>本次录音回放</span>
+          <audio controls preload="none" :src="audioUrl(sessionAudioId)" />
+        </div>
 
         <p v-if="error" class="error-banner" role="alert">{{ error }}</p>
       </section>
@@ -129,6 +154,7 @@ const actionLabel = computed(() => {
         :finals="finals"
         :partial="partial"
         :state="state"
+        :speaker-enabled="speakerEnabled"
         @clear="clear"
       />
     </main>

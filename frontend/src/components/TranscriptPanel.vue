@@ -6,13 +6,23 @@ const props = defineProps<{
   finals: TranscriptSegment[]
   partial: TranscriptSegment | null
   state: SessionState
+  speakerEnabled: boolean
 }>()
 
 const emit = defineEmits<{
   clear: []
 }>()
 
-const plainText = computed(() => props.finals.map((item) => item.text).join('\n'))
+const plainText = computed(() =>
+  props.finals
+    .map((item) => {
+      if (!props.speakerEnabled) return item.text
+      const speaker = item.speakerId || 'speaker_?'
+      const label = item.speakerName ? `${speaker} ${item.speakerName}` : speaker
+      return `[${label}] ${item.text}`
+    })
+    .join('\n'),
+)
 const hasText = computed(() => plainText.value.length > 0)
 
 async function copyAll(): Promise<void> {
@@ -29,6 +39,10 @@ function downloadAll(): void {
   anchor.download = `funasr-transcript-${new Date().toISOString().slice(0, 10)}.txt`
   anchor.click()
   URL.revokeObjectURL(url)
+}
+
+function audioUrl(audioId: string): string {
+  return `/api/v1/asr/audio/${encodeURIComponent(audioId)}`
 }
 </script>
 
@@ -53,13 +67,37 @@ function downloadAll(): void {
         <article
           v-for="(item, index) in finals"
           :key="item.id"
-          v-memo="[item.text, item.latencyMs, index]"
+          v-memo="[
+            item.text,
+            item.latencyMs,
+            item.speakerId,
+            item.speakerName,
+            item.speakerEnrolled,
+            item.audioId,
+            index,
+            speakerEnabled,
+          ]"
           class="transcript-line"
         >
           <span class="transcript-line__index">
             {{ String(index + 1).padStart(2, '0') }}
           </span>
-          <p>{{ item.text }}</p>
+          <div class="transcript-line__content">
+            <p>
+              <span v-if="speakerEnabled" class="transcript-line__speaker">
+                {{ item.speakerId || 'speaker_?' }}
+                <template v-if="item.speakerName"> · {{ item.speakerName }}</template>
+              </span>
+              {{ item.text }}
+            </p>
+            <audio
+              v-if="item.audioId"
+              class="transcript-line__audio"
+              controls
+              preload="none"
+              :src="audioUrl(item.audioId)"
+            />
+          </div>
           <span v-if="item.latencyMs" class="transcript-line__latency">
             {{ item.latencyMs }} ms
           </span>
@@ -67,7 +105,13 @@ function downloadAll(): void {
 
         <article v-if="partial" class="transcript-line transcript-line--partial">
           <span class="transcript-line__index">LIVE</span>
-          <p>{{ partial.text }}<i class="typing-cursor" /></p>
+          <p>
+            <span v-if="speakerEnabled" class="transcript-line__speaker">
+              {{ partial.speakerId || 'speaker_?' }}
+              <template v-if="partial.speakerName"> · {{ partial.speakerName }}</template>
+            </span>
+            {{ partial.text }}<i class="typing-cursor" />
+          </p>
         </article>
       </template>
 

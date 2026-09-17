@@ -7,7 +7,8 @@ import logging
 from contextlib import suppress
 from typing import Any
 
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, Request, WebSocket, WebSocketDisconnect
+from fastapi.responses import Response
 
 from backend.app.api.protocol import (
     ProtocolError,
@@ -93,7 +94,9 @@ async def asr_stream(websocket: WebSocket) -> None:
     await websocket.accept()
     settings = websocket.app.state.settings
     models = websocket.app.state.models
-    session = RecognitionSession(websocket, models, settings)
+    speaker_store = getattr(websocket.app.state, "speaker_store", None)
+    audio_store = getattr(websocket.app.state, "audio_buffer_store", None)
+    session = RecognitionSession(websocket, models, settings, speaker_store, audio_store)
 
     await session.send_event(
         "connected",
@@ -133,3 +136,18 @@ async def asr_stream(websocket: WebSocket) -> None:
         await asyncio.gather(receive_task, process_task, return_exceptions=True)
         await session.abort()
         logger.info("ASR WebSocket disconnected: %s", session.session_id)
+
+
+@router.get("/asr/audio/{audio_id}")
+async def get_audio(audio_id: str, request: Request) -> Response:
+    store = getattr(request.app.state, "audio_buffer_store", None)
+    if store is None:
+        return Response(status_code=404)
+    wav_bytes = await asyncio.to_thread(store.get_wav, audio_id)
+    if wav_bytes is None:
+        return Response(status_code=404)
+    return Response(
+        content=wav_bytes,
+        media_type="audio/wav",
+        headers={"Cache-Control": "no-store"},
+    )

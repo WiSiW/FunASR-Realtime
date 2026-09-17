@@ -15,6 +15,7 @@
   - `stream`：`paraformer-zh-streaming` 边说边出临时结果
   - `push`：持续采集到手动停止，再统一识别并恢复标点
 - 实时音量、连接状态、分段编号、识别延迟和识别文本展示
+- 会话内说话人识别，结果标记为 `speaker_01`、`speaker_02`...
 - 文本复制、清空、TXT 导出
 - 保留原命令行麦克风识别入口
 - 独立常驻模型服务：模型只加载一次，API 重启后直接复用
@@ -120,12 +121,77 @@ Vite 会把 `/api`（包含 WebSocket）代理到 `http://127.0.0.1:8000`。需�
 | 实时流式 | VAD 分句，句内 600ms 增量解码 | paraformer-zh-streaming | 实时字幕、低延迟交互 |
 | 按键说话 | 点击停止后识别全部音频 | Paraformer-zh + CT-Punc | 短句、命令、录音转写 |
 
-前端展开“VAD 灵敏度”可调整 `auto` 和 `stream` 模式的能量阈值。环境安静时调低，噪声较大时调高。
+前端展开“识别设置”可调整 `auto` 和 `stream` 模式的能量阈值，并可开关说话人识别。
+环境安静时调低能量阈值，噪声较大时调高。
+
+## 说话人识别
+
+说话人识别默认开启。每次开始识别独立编号：
+
+- 会话中第一个稳定说话人标记为 `speaker_01`
+- 后续新说话人依次标记为 `speaker_02`、`speaker_03`...
+- 识别结果会在前端显示说话人标签，复制和导出文本时也会带上 `[speaker_01]` 前缀
+
+主要配置：
+
+```env
+FUNASR_SPEAKER_ENABLED=true
+FUNASR_SPEAKER_MODEL=cam++
+FUNASR_SPEAKER_SIMILARITY_THRESHOLD=0.70
+FUNASR_SPEAKER_NEW_THRESHOLD=0.45
+FUNASR_SPEAKER_SWITCH_MARGIN=0.08
+FUNASR_SPEAKER_MIN_SEGMENT_SEC=0.8
+FUNASR_SPEAKER_MAX_SPEAKERS=8
+FUNASR_SPEAKER_EMBEDDING_WINDOW_SEC=1.5
+FUNASR_SPEAKER_EMBEDDING_INTERVAL_SEC=0.8
+```
+
+- `auto` / `push`：每个识别片段分配一个说话人。
+- `stream`：使用最近音频窗口每约 0.8 秒更新一次当前说话人，句末再用整句音频校正。
+- `similarity_threshold` 用于确认同一说话人；`new_speaker_threshold` 以下的相似度才会新建说话人。
+  两者之间的模糊区域优先归到已有说话人，避免同一人被拆成多个 ID。
+- 默认首次使用时加载 CAM++ 模型，模型缺失时会先下载；加入
+  `FUNASR_PRELOAD_MODELS=offline,streaming,speaker` 可以在常驻服务启动时一起预加载。
+- 两个说话人重叠说话时无法可靠分配单一标签，需要专门的 diarization 模型。
+- 当前编号只在单次 WebSocket 会话内稳定，不用于跨会话识别具体人员。
+- WebSocket 自动重连或重新开始识别后，编号会重新从 `speaker_01` 开始。
+
+### 声纹库与注册
+
+页面“识别设置 → 声纹库”可以录入说话人姓名，并录音 3 秒完成注册。注册成功后：
+
+- 声纹库中的说话人使用稳定 ID：`speaker_01`、`speaker_02`...
+- 识别时优先匹配已注册声纹，匹配成功会显示 ID 和姓名，例如 `speaker_01 · 张三`。
+- 未注册说话人在存在声纹库时使用 `unknown_01`、`unknown_02`...
+- 同名再次注册会按样本数做加权中心向量更新，而不是创建重复记录。
+- 注册时会按多个时间窗口提取 embedding，只保留彼此一致的声纹；如果音频里混入多人或噪声，
+  会拒绝注册并要求重新录制。
+
+声纹库默认保存在：
+
+```text
+~/.cache/funasr-realtime/speakers.sqlite3
+```
+
+注册在下次开始识别时生效。相关 REST API：
+
+- `GET /api/v1/speakers`：列出已注册声纹
+- `POST /api/v1/speakers/enroll?name=张三&sample_rate=16000`：注册声纹
+  - Body 为 raw PCM，16kHz、单声道、`pcm_s16le`
+  - 音频长度 1～60 秒
+- `DELETE /api/v1/speakers/{speaker_id}`：删除声纹
+
+声纹匹配阈值：
+
+```env
+FUNASR_SPEAKER_ENROLLED_MATCH_THRESHOLD=0.70
+```
+
+注册说话人没有被识别出来时，可以适当降低该阈值；不同注册人被误匹配时，可以提高该阈值。
 
 ## 模型常驻与预加载
 
-后端默认使用独立的常驻模型服务。模型只在第一次启动常驻服务时加载到内存；之后 API
-进程重启只会连接这个服务，不会再次加载权重。
+后端默认使用独立的常驻模型服务。模型只在第一次启动常驻服务时加载到内存；之后 API 进程重启只会连接这个服务，不会再次加载权重。
 
 ```bash
 # 启动 API；模型服务不存在时会自动在后台启动
@@ -196,6 +262,12 @@ docker compose up -d
 - `docker compose down -v` 会删除模型卷，下次启动需要重新下载。
 - 如果镜像构建时选择 `PRELOAD_MODELS=false`，首次容器启动时会下载模型到持久卷。
 
+声纹库保存在 Docker 命名卷 `funasr-speakers`，重建 backend 容器不会丢失注册数据：
+
+```text
+/data/speakers.sqlite3
+```
+
 重启 API 容器不会重新加载模型；需要重新加载时重启模型服务容器：
 
 ```bash
@@ -238,10 +310,27 @@ uvicorn backend.app.main:app --host 0.0.0.0 --port 8000
 
 - `GET /api/v1/health`：服务及模型加载状态
 - `GET /api/v1/modes`：可用识别模式
+- `GET /api/v1/asr/audio/{audio_id}`：获取识别片段或整段会话的原始 WAV 音频
 - `GET /docs`：OpenAPI 文档
 - `WS /api/v1/asr/stream`：实时音频识别
 
 WebSocket 消息格式和事件说明见 [docs/protocol.md](docs/protocol.md)。
+
+## 原音回放与缺字排查
+
+每次识别结果都会保留对应的原始音频，并提供播放功能：
+
+- 每条 `final` 文本下方有独立音频播放器，对应这一句实际送入 ASR 的音频。
+- 停止识别后，控制区会出现“本次录音回放”，对应后端本次收到的完整音频。
+- `ready` 事件返回 `session_audio_id`，`final` 事件返回 `audio_id`。
+- 音频通过 `GET /api/v1/asr/audio/{audio_id}` 返回 WAV。
+
+排查方式：
+
+- 整段录音里能听到、但对应文本缺失：问题在 VAD/ASR/标点或模型参数。
+- 整段录音里本身就听不到：问题在浏览器采集、音频上传、WebSocket 或服务端接收链路。
+
+音频缓冲保存在内存中，默认保留 1 小时，不跨后端重启持久化。
 
 ## 命令行模式
 
@@ -285,6 +374,7 @@ make build      # 前端生产构建
 | `FUNASR_VAD_HANGOVER_SEC` | `0.6` | 静音多久结束一句 |
 | `FUNASR_VAD_MIN_SPEECH_SEC` | `0.25` | 最短有效语音 |
 | `FUNASR_VAD_MAX_SPEECH_SEC` | `30` | 单句最长语音 |
+| `FUNASR_VAD_PRE_ROLL_SEC` | `0.4` | 语音起点前保留的音频长度，减少句首缺字 |
 | `FUNASR_MAX_PUSH_SEC` | `120` | 按键模式单次最长录音 |
 | `FUNASR_TORCH_NUM_THREADS` | `2` | PyTorch CPU 推理线程数；调低可优先保证 UI 流畅 |
 | `FUNASR_TORCH_INTEROP_THREADS` | `1` | PyTorch 算子间并行线程数，推理场景通常设为 1 |
@@ -298,6 +388,19 @@ make build      # 前端生产构建
 | `FUNASR_MODEL_DAEMON_START_TIMEOUT` | `600` | 首次启动等待模型加载的超时秒数 |
 | `FUNASR_MODEL_DAEMON_SESSION_TTL` | `1800` | 无主流式会话自动清理秒数 |
 | `FUNASR_RELOAD_MODELS` | `false` | API 启动时是否强制重载常驻模型 |
+| `FUNASR_SPEAKER_ENABLED` | `true` | 是否启用说话人识别 |
+| `FUNASR_SPEAKER_MODEL` | `cam++` | 说话人 embedding 模型 |
+| `FUNASR_SPEAKER_MODEL_REVISION` | `master` | 说话人模型版本 |
+| `FUNASR_SPEAKER_DB` | `~/.cache/funasr-realtime/speakers.sqlite3` | 声纹库 SQLite 路径 |
+| `FUNASR_SPEAKER_SIMILARITY_THRESHOLD` | `0.70` | 同一说话人相似度阈值 |
+| `FUNASR_SPEAKER_NEW_THRESHOLD` | `0.45` | 低于该相似度才创建新说话人 |
+| `FUNASR_SPEAKER_ENROLLED_MATCH_THRESHOLD` | `0.70` | 已注册声纹匹配阈值 |
+| `FUNASR_SPEAKER_SWITCH_MARGIN` | `0.08` | 说话人切换迟滞值 |
+| `FUNASR_SPEAKER_MIN_SEGMENT_SEC` | `0.8` | 创建新说话人的最短语音长度 |
+| `FUNASR_SPEAKER_MAX_SPEAKERS` | `8` | 单会话最多说话人数 |
+| `FUNASR_SPEAKER_EMBEDDING_WINDOW_SEC` | `1.5` | 流式声纹窗口长度 |
+| `FUNASR_SPEAKER_EMBEDDING_INTERVAL_SEC` | `0.8` | 流式声纹更新间隔 |
+| `FUNASR_SPEAKER_CENTROID_UPDATE_ALPHA` | `0.1` | 说话人中心向量更新系数 |
 
 ## 排查
 
@@ -308,6 +411,17 @@ make build      # 前端生产构建
   启动之间没有执行 `make model-daemon-stop` 或重启 Docker 的 `model-daemon` 容器。
 - 需要重新加载模型：执行 `make model-daemon-reload`，或使用
   `make dev-backend-reload-models` 启动 API。
+- 没有说话人标签：确认 `FUNASR_SPEAKER_ENABLED=true`，并检查首次 CAM++ 模型是否加载成功。
+- 同一人被拆成多个 speaker：降低 `FUNASR_SPEAKER_NEW_THRESHOLD`（例如 `0.30`），
+  必要时降低 `FUNASR_SPEAKER_SIMILARITY_THRESHOLD`（例如 `0.62`），并适当增大
+  `FUNASR_SPEAKER_MIN_SEGMENT_SEC`。
+- 不同人被合并成同一个 speaker：提高 `FUNASR_SPEAKER_NEW_THRESHOLD` 和
+  `FUNASR_SPEAKER_SIMILARITY_THRESHOLD`。
+- 已注册说话人没有被匹配：降低 `FUNASR_SPEAKER_ENROLLED_MATCH_THRESHOLD`，
+  并确认注册时只有一个人说话。
+- 未注册说话人被误识别成注册人：提高 `FUNASR_SPEAKER_ENROLLED_MATCH_THRESHOLD`，
+  或重新注册声纹，避免录入时混入其他人声音。
+- 修复旧声纹后建议删除原声纹并重新注册，避免历史注册中心向量质量较差。
 - 有音量但没有结果：调低 VAD 阈值，或换用“按键说话”模式验证识别链路。
 - 识别时浏览器或系统卡顿：默认已把 PyTorch 限制为 2 个推理线程；仍卡顿时可把
   `FUNASR_TORCH_NUM_THREADS` 调到 `1`，并将识别模式切换为“实时流式”以降低单次计算量。

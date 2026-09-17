@@ -65,6 +65,14 @@ class IncrementalStreamingModel:
         return IncrementalStreamingSession()
 
 
+class FakeSpeakerModel:
+    def embed(self, audio: np.ndarray, sr: int = 16000) -> np.ndarray:
+        return np.asarray([1.0, 0.0, 0.0], dtype=np.float32)
+
+    def ready(self) -> None:
+        return None
+
+
 class FakeModelRegistry:
     def __init__(
         self,
@@ -80,8 +88,16 @@ class FakeModelRegistry:
     def get_streaming(self) -> FakeStreamingModel | IncrementalStreamingModel:
         return self.streaming_model
 
+    def get_speaker(self) -> FakeSpeakerModel:
+        return FakeSpeakerModel()
+
     def status(self) -> dict[str, bool]:
-        return {"offline_loaded": True, "streaming_loaded": True}
+        return {
+            "offline_loaded": True,
+            "streaming_loaded": True,
+            "speaker_loaded": True,
+            "ready": True,
+        }
 
 
 def pcm_block(value: int, samples: int = 1600) -> bytes:
@@ -126,6 +142,8 @@ def test_streaming_websocket_session() -> None:
                     events.append(websocket.receive_json())
                 final = next(item for item in events if item["type"] == "final")
                 assert final["data"]["text"] == "你好世界"
+                assert final["data"]["speaker_id"] == "speaker_01"
+                assert final["data"]["audio_id"]
 
                 websocket.send_json({"type": "stop", "request_id": "stop-1"})
                 stopped = websocket.receive_json()
@@ -187,6 +205,49 @@ def test_streaming_websocket_accumulates_incremental_partials() -> None:
                     if event["type"] == "final":
                         final = event
                 assert final["data"]["text"] == "欢迎大家来体验语音识别"
+        finally:
+            app.state.models = original_registry
+
+
+def test_auto_websocket_includes_speaker_id() -> None:
+    with TestClient(app) as client:
+        original_registry = app.state.models
+        app.state.models = FakeModelRegistry()
+        try:
+            with client.websocket_connect("/api/v1/asr/stream") as websocket:
+                assert websocket.receive_json()["type"] == "connected"
+                websocket.send_json(
+                    {
+                        "type": "start",
+                        "request_id": "start-speaker",
+                        "data": {
+                            "mode": "auto",
+                            "vad": {
+                                "energy_threshold": 0.02,
+                                "hangover_sec": 0.1,
+                                "min_speech_sec": 0.1,
+                                "max_speech_sec": 2,
+                            },
+                        },
+                    }
+                )
+                assert websocket.receive_json()["type"] == "ready"
+                assert websocket.receive_json()["data"]["state"] == "listening"
+                time.sleep(0.05)
+
+                websocket.send_bytes(pcm_block(12000))
+                while True:
+                    event = websocket.receive_json()
+                    if event["type"] == "status" and event["data"]["state"] == "speech":
+                        break
+                websocket.send_bytes(pcm_block(0))
+                final = None
+                while final is None:
+                    event = websocket.receive_json()
+                    if event["type"] == "final":
+                        final = event
+                assert final["data"]["speaker_id"] == "speaker_01"
+                assert final["data"]["audio_id"]
         finally:
             app.state.models = original_registry
 

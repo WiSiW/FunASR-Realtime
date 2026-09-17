@@ -12,11 +12,13 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from backend.app.api.routes import asr, system
+from backend.app.api.routes import asr, speakers, system
 from backend.app.core.config import Settings
 from backend.app.core.logging import configure_logging
+from backend.app.services.audio_store import AudioBufferStore
 from backend.app.services.model_daemon import RemoteModelRegistry, ensure_model_daemon
 from backend.app.services.model_registry import ModelRegistry
+from backend.app.services.speaker_store import SpeakerProfileStore
 
 logger = logging.getLogger(__name__)
 
@@ -26,6 +28,8 @@ async def lifespan(app: FastAPI):
     settings = Settings.from_env()
     configure_logging()
     app.state.settings = settings
+    app.state.speaker_store = SpeakerProfileStore(settings.speaker_db_path)
+    app.state.audio_buffer_store = AudioBufferStore()
 
     def build_registry():
         if settings.model_daemon_enabled:
@@ -37,7 +41,11 @@ async def lifespan(app: FastAPI):
             registry.preload(settings.preload_models)
             return registry
 
-        registry = ModelRegistry(model_revision=settings.model_revision)
+        registry = ModelRegistry(
+            model_revision=settings.model_revision,
+            speaker_model=settings.speaker_model,
+            speaker_model_revision=settings.speaker_model_revision,
+        )
         if settings.preload_models:
             logger.info(
                 "Preloading FunASR models before startup: %s",
@@ -58,7 +66,11 @@ async def lifespan(app: FastAPI):
         if settings.preload_strict:
             raise
         logger.warning("Falling back to lazy in-process model loading")
-        registry = ModelRegistry(model_revision=settings.model_revision)
+        registry = ModelRegistry(
+            model_revision=settings.model_revision,
+            speaker_model=settings.speaker_model,
+            speaker_model_revision=settings.speaker_model_revision,
+        )
     app.state.models = registry
 
     logger.info("%s started", settings.app_name)
@@ -84,6 +96,7 @@ app.add_middleware(
 
 app.include_router(system.router, prefix=settings.api_prefix)
 app.include_router(asr.router, prefix=settings.api_prefix)
+app.include_router(speakers.router, prefix=settings.api_prefix)
 
 
 frontend_dist = Path(__file__).resolve().parents[2] / "frontend" / "dist"

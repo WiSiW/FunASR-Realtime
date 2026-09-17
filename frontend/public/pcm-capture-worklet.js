@@ -15,6 +15,11 @@ class PcmCaptureProcessor extends AudioWorkletProcessor {
     this.chunkSize = Math.max(128, Math.round((sampleRate * chunkDurationMs) / 1000))
     this.buffer = new Float32Array(this.chunkSize)
     this.writeIndex = 0
+    this.port.onmessage = (event) => {
+      if (event.data && event.data.type === 'flush') {
+        this.flush()
+      }
+    }
   }
 
   process(inputs) {
@@ -41,6 +46,18 @@ class PcmCaptureProcessor extends AudioWorkletProcessor {
       }
     }
     return true
+  }
+
+  flush() {
+    if (this.writeIndex > 0) {
+      const samples = this.buffer.slice(0, this.writeIndex)
+      this.port.postMessage(
+        { samples, level: calculateRms(samples) },
+        [samples.buffer],
+      )
+      this.writeIndex = 0
+    }
+    this.port.postMessage({ flushed: true })
   }
 }
 

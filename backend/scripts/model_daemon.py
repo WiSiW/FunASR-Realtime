@@ -26,6 +26,7 @@ from backend.app.core.config import Settings
 from backend.app.core.logging import configure_logging
 from backend.app.core.performance import configure_inference_threads
 from backend.app.services.model_daemon import (
+    DAEMON_PROTOCOL_VERSION,
     ModelDaemonClient,
     ModelDaemonError,
 )
@@ -64,7 +65,11 @@ class ModelDaemonState:
         self._janitor.start()
 
     def _load_models(self, targets: tuple[str, ...] | list[str] | None = None) -> ModelRegistry:
-        models = ModelRegistry(model_revision=self.settings.model_revision)
+        models = ModelRegistry(
+            model_revision=self.settings.model_revision,
+            speaker_model=self.settings.speaker_model,
+            speaker_model_revision=self.settings.speaker_model_revision,
+        )
         selected = self.settings.preload_models if targets is None else tuple(targets)
         if selected:
             models.preload(selected)
@@ -85,6 +90,7 @@ class ModelDaemonState:
     def ping(self) -> dict[str, Any]:
         with self._state_lock:
             return {
+                "protocol_version": DAEMON_PROTOCOL_VERSION,
                 "status": self._models.status(),
                 "pid": os.getpid(),
                 "active_requests": self._active_requests,
@@ -123,6 +129,19 @@ class ModelDaemonState:
         with self._request():
             text = self._models.get_offline().transcribe(audio, sr)
             return {"text": text}
+
+    def speaker_embed(self, audio: np.ndarray, sr: int) -> dict[str, Any]:
+        with self._request():
+            embedding = self._models.get_speaker().embed(audio, sr)
+            return {
+                "embedding": embedding.astype(np.float32).tolist(),
+                "dimension": int(embedding.size),
+            }
+
+    def speaker_ready(self) -> dict[str, bool]:
+        with self._request():
+            self._models.get_speaker()
+            return {"ready": True}
 
     def stream_new(self) -> dict[str, str]:
         with self._request():
@@ -199,6 +218,13 @@ def _dispatch(state: ModelDaemonState, payload: dict[str, Any]) -> Any:
             payload["audio"],
             int(payload.get("sr", 16000)),
         )
+    if operation == "speaker_embed":
+        return state.speaker_embed(
+            payload["audio"],
+            int(payload.get("sr", 16000)),
+        )
+    if operation == "speaker_ready":
+        return state.speaker_ready()
     if operation == "stream_new":
         return state.stream_new()
     if operation == "stream_feed":

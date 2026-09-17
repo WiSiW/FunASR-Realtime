@@ -20,6 +20,8 @@ export function useAsrSession() {
   const finals = ref<TranscriptSegment[]>([])
   const partial = ref<TranscriptSegment | null>(null)
   const energyThreshold = ref(0.012)
+  const speakerEnabled = ref(true)
+  const sessionAudioId = ref('')
 
   const client = new AsrSocketClient()
   const microphone = useMicrophone()
@@ -61,6 +63,10 @@ export function useAsrSession() {
   function handleServerEvent(message: ServerMessage): void {
     const data = message.data || {}
     switch (message.type) {
+      case 'ready': {
+        sessionAudioId.value = String(data.session_audio_id || '')
+        break
+      }
       case 'status': {
         const serverState = String(data.state || '')
         if (
@@ -84,6 +90,10 @@ export function useAsrSession() {
           text,
           final: false,
           createdAt: Date.now(),
+          speakerId: String(data.speaker_id || '') || undefined,
+          speakerName: String(data.speaker_name || '') || undefined,
+          speakerPending: Boolean(data.speaker_pending),
+          speakerEnrolled: Boolean(data.speaker_enrolled),
         }
         break
       }
@@ -96,9 +106,28 @@ export function useAsrSession() {
             final: true,
             createdAt: Date.now(),
             latencyMs: Number(data.latency_ms || 0) || undefined,
+            audioId: String(data.audio_id || '') || undefined,
+            speakerId: String(data.speaker_id || '') || undefined,
+            speakerName: String(data.speaker_name || '') || undefined,
+            speakerConfidence: Number(data.speaker_confidence || 0) || undefined,
+            speakerPending: Boolean(data.speaker_pending),
+            speakerEnrolled: Boolean(data.speaker_enrolled),
           })
         }
         partial.value = null
+        break
+      }
+      case 'speaker': {
+        const speakerId = String(data.speaker_id || '')
+        if (partial.value && speakerId && !partial.value.speakerId) {
+          partial.value = {
+            ...partial.value,
+            speakerId,
+            speakerName: String(data.speaker_name || '') || undefined,
+            speakerPending: false,
+            speakerEnrolled: Boolean(data.speaker_enrolled),
+          }
+        }
         break
       }
       case 'error': {
@@ -268,6 +297,18 @@ export function useAsrSession() {
         hangover_sec: 0.6,
         min_speech_sec: 0.25,
         max_speech_sec: 30,
+        pre_roll_sec: 0.4,
+      },
+      speaker: {
+        enabled: speakerEnabled.value,
+        similarity_threshold: 0.7,
+        new_speaker_threshold: 0.45,
+        switch_margin: 0.08,
+        min_segment_sec: 0.8,
+        max_speakers: 8,
+        embedding_window_sec: 1.5,
+        embedding_interval_sec: 0.8,
+        centroid_update_alpha: 0.1,
       },
     }
   }
@@ -318,6 +359,8 @@ export function useAsrSession() {
     finals,
     partial,
     energyThreshold,
+    speakerEnabled,
+    sessionAudioId,
     active,
     busy,
     capturing: microphone.capturing,
@@ -335,4 +378,3 @@ function resolveWebSocketUrl(): string {
   const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
   return `${protocol}//${window.location.host}${WS_PATH}`
 }
-

@@ -46,6 +46,21 @@ export interface TranscriptSegment {
   final: boolean
   createdAt: number
   latencyMs?: number
+  audioId?: string
+  speakerId?: string
+  speakerName?: string
+  speakerConfidence?: number
+  speakerPending?: boolean
+  speakerEnrolled?: boolean
+}
+
+export interface SpeakerProfile {
+  speaker_id: string
+  name: string
+  dimension: number
+  sample_count: number
+  created_at?: string
+  updated_at?: string
 }
 
 export interface ServerMessage {
@@ -64,5 +79,17 @@ export interface StartSessionOptions {
     hangover_sec: number
     min_speech_sec: number
     max_speech_sec: number
+    pre_roll_sec: number
+  }
+  speaker: {
+    enabled: boolean
+    similarity_threshold: number
+    new_speaker_threshold: number
+    switch_margin: number
+    min_segment_sec: number
+    max_speakers: number
+    embedding_window_sec: number
+    embedding_interval_sec: number
+    centroid_update_alpha: number
   }
 }

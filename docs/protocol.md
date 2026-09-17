@@ -21,7 +21,19 @@
       "energy_threshold": 0.012,
       "hangover_sec": 0.6,
       "min_speech_sec": 0.25,
-      "max_speech_sec": 30
+      "max_speech_sec": 30,
+      "pre_roll_sec": 0.4
+    },
+    "speaker": {
+      "enabled": true,
+      "similarity_threshold": 0.70,
+      "new_speaker_threshold": 0.45,
+      "switch_margin": 0.08,
+      "min_segment_sec": 0.8,
+      "max_speakers": 8,
+      "embedding_window_sec": 1.5,
+      "embedding_interval_sec": 0.8,
+      "centroid_update_alpha": 0.1
     }
   }
 }
@@ -46,11 +58,15 @@
 ## 服务端消息
 
 - `connected`：WebSocket 已建立，并返回建议的心跳间隔。
-- `ready`：模型已加载，可以发送音频。
+- `ready`：模型已加载，可以发送音频；包含 `session_audio_id`，可用于播放整段会话原音。
 - `status`：`listening`、`speech`、`processing`、`stopped` 状态变化。
 - `level`：麦克风 PCM 的 RMS 能量，约 10Hz。
-- `partial`：流式模式的临时累计文本。
-- `final`：一句识别完成，包含 `segment_id`、`text`、可选 `latency_ms`。
+- `partial`：流式模式的临时累计文本；启用说话人识别时包含 `speaker_id`、
+  `speaker_name`、`speaker_enrolled`、`speaker_pending`。
+- `final`：一句识别完成，包含 `segment_id`、`text`、可选 `latency_ms`，以及
+  `speaker_id`、`speaker_name`、`speaker_enrolled`、`speaker_confidence`、
+  `speaker_pending`、`speaker_is_new`、`audio_id`。
+- `speaker`：流式模式检测到说话人新增或切换时发送，包含 `speaker_id` 和 `status`。
 - `stopped`：会话已结束，可以再次发送 `start`。
 - `error`：参数或服务端错误，包含 `code` 与 `message`。
 - `pong`：心跳响应。
@@ -60,3 +76,16 @@
 ```json
 {"type": "event_name", "request_id": "optional", "data": {}}
 ```
+
+## 声纹库 REST API
+
+- `GET /api/v1/speakers`
+- `POST /api/v1/speakers/enroll?name=张三&sample_rate=16000`
+  - Body：16kHz 单声道 `pcm_s16le` 原始音频
+- `DELETE /api/v1/speakers/{speaker_id}`
+
+## 原音播放 API
+
+- `GET /api/v1/asr/audio/{audio_id}`
+  - 返回 16kHz 单声道 WAV
+  - `audio_id` 可来自 `ready.session_audio_id` 或 `final.audio_id`

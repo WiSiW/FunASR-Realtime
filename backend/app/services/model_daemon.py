@@ -23,6 +23,7 @@ from backend.app.core.config import Settings
 
 logger = logging.getLogger(__name__)
 _PING_TIMEOUT_SECONDS = 2.0
+DAEMON_PROTOCOL_VERSION = 2
 
 
 class ModelDaemonError(RuntimeError):
@@ -152,6 +153,27 @@ class RemoteStreamingModel:
         return RemoteStreamingSession(self.client, session_id)
 
 
+class RemoteSpeakerEmbeddingModel:
+    """Proxy for the daemon-hosted CAM++ embedding model."""
+
+    def __init__(self, client: ModelDaemonClient) -> None:
+        self.client = client
+
+    def embed(self, audio: np.ndarray, sr: int = 16000) -> np.ndarray:
+        result = self.client.request(
+            {
+                "op": "speaker_embed",
+                "audio": audio,
+                "sr": sr,
+            }
+        )
+        embedding = (result or {}).get("embedding", [])
+        return np.asarray(embedding, dtype=np.float32).reshape(-1)
+
+    def ready(self) -> None:
+        self.client.request({"op": "speaker_ready"}, timeout=None)
+
+
 class RemoteModelRegistry:
     """ModelRegistry-compatible facade backed by the persistent daemon."""
 
@@ -159,12 +181,16 @@ class RemoteModelRegistry:
         self.client = client
         self._offline = RemoteOfflineModel(client)
         self._streaming = RemoteStreamingModel(client)
+        self._speaker = RemoteSpeakerEmbeddingModel(client)
 
     def get_offline(self) -> RemoteOfflineModel:
         return self._offline
 
     def get_streaming(self) -> RemoteStreamingModel:
         return self._streaming
+
+    def get_speaker(self) -> RemoteSpeakerEmbeddingModel:
+        return self._speaker
 
     def preload(self, targets: tuple[str, ...] | list[str] | set[str]) -> None:
         # The daemon owns model loading.  Ping so startup fails visibly if it
@@ -202,13 +228,22 @@ def model_daemon_client(settings: Settings) -> ModelDaemonClient:
 def ensure_model_daemon(settings: Settings) -> tuple[ModelDaemonClient, bool]:
     """Return a live daemon client and whether this call started it."""
     client = model_daemon_client(settings)
-    if _ping(client):
-        logger.info(
-            "Reusing persistent model daemon at %s:%d",
-            settings.model_daemon_host,
-            settings.model_daemon_port,
+    ping = _ping_result(client)
+    if ping is not None:
+        protocol_version = _protocol_version(ping)
+        if protocol_version >= DAEMON_PROTOCOL_VERSION:
+            logger.info(
+                "Reusing persistent model daemon at %s:%d",
+                settings.model_daemon_host,
+                settings.model_daemon_port,
+            )
+            return client, False
+
+        logger.warning(
+            "Detected old model daemon protocol %s; restarting daemon",
+            protocol_version or "unknown",
         )
-        return client, False
+        _stop_old_daemon(client)
 
     started = False
     if settings.model_daemon_autostart:
@@ -217,7 +252,8 @@ def ensure_model_daemon(settings: Settings) -> tuple[ModelDaemonClient, bool]:
 
     deadline = time.monotonic() + settings.model_daemon_start_timeout
     while time.monotonic() < deadline:
-        if _ping(client):
+        ping = _ping_result(client)
+        if ping is not None and _protocol_version(ping) >= DAEMON_PROTOCOL_VERSION:
             logger.info(
                 "Persistent model daemon is ready at %s:%d",
                 settings.model_daemon_host,
@@ -248,12 +284,33 @@ def reload_model_daemon(settings: Settings) -> Any:
     )
 
 
-def _ping(client: ModelDaemonClient) -> bool:
+def _ping_result(client: ModelDaemonClient) -> dict[str, Any] | None:
     try:
-        client.request({"op": "ping"}, timeout=_PING_TIMEOUT_SECONDS)
-        return True
+        result = client.request({"op": "ping"}, timeout=_PING_TIMEOUT_SECONDS)
     except ModelDaemonError:
-        return False
+        return None
+    return result if isinstance(result, dict) else {}
+
+
+def _protocol_version(ping: dict[str, Any]) -> int:
+    try:
+        return int(ping.get("protocol_version", 0) or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _stop_old_daemon(client: ModelDaemonClient) -> None:
+    try:
+        client.request({"op": "shutdown"}, timeout=5.0)
+    except ModelDaemonError:
+        pass
+
+    deadline = time.monotonic() + 10.0
+    while time.monotonic() < deadline:
+        if _ping_result(client) is None:
+            return
+        time.sleep(0.2)
+    logger.warning("Old model daemon did not stop in time; attempting to start a new one")
 
 
 def _start_model_daemon(settings: Settings) -> None:

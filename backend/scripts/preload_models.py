@@ -16,7 +16,11 @@ def main() -> None:
     targets = settings.preload_models or ("offline", "streaming")
 
     logger.info("Preparing FunASR model cache: %s", ", ".join(targets))
-    registry = ModelRegistry(model_revision=settings.model_revision)
+    registry = ModelRegistry(
+        model_revision=settings.model_revision,
+        speaker_model=settings.speaker_model,
+        speaker_model_revision=settings.speaker_model_revision,
+    )
     registry.preload(targets)
     logger.info("FunASR model cache is ready")
 

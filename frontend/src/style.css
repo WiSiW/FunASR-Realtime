@@ -441,6 +441,13 @@ h2 {
   padding: 9px 0 2px;
 }
 
+.advanced-panel .check-row input[type="checkbox"] {
+  grid-column: 2;
+  grid-row: 1;
+  width: auto;
+  justify-self: end;
+}
+
 .advanced-panel label span {
   display: grid;
   color: #b7cbc4;
@@ -464,6 +471,157 @@ h2 {
   color: var(--green);
   font-family: "SFMono-Regular", Consolas, monospace;
   font-size: 11px;
+}
+
+.speaker-library {
+  margin-top: 12px;
+  border-top: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.speaker-library summary {
+  padding: 14px 0 4px;
+  cursor: pointer;
+  user-select: none;
+}
+
+.speaker-library__body {
+  display: grid;
+  gap: 10px;
+  padding-top: 8px;
+}
+
+.speaker-library__field {
+  display: grid;
+  gap: 5px;
+}
+
+.speaker-library__field span {
+  color: #b7cbc4;
+}
+
+.speaker-library__field input {
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: #e1eee9;
+  background: rgba(8, 24, 20, 0.75);
+  outline: none;
+}
+
+.speaker-library__field input:focus {
+  border-color: rgba(100, 243, 180, 0.4);
+}
+
+.speaker-library__record {
+  padding: 9px 10px;
+  border: 1px solid rgba(100, 243, 180, 0.28);
+  border-radius: 8px;
+  color: var(--green);
+  background: rgba(100, 243, 180, 0.07);
+  cursor: pointer;
+}
+
+.speaker-library__record:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+.speaker-library__meter {
+  height: 4px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: rgba(100, 243, 180, 0.1);
+}
+
+.speaker-library__meter span {
+  display: block;
+  height: 100%;
+  background: var(--green);
+  transition: width 0.12s ease;
+}
+
+.speaker-library__message,
+.speaker-library__error,
+.speaker-library__empty {
+  margin: 0;
+  font-size: 10px;
+  line-height: 1.5;
+}
+
+.speaker-library__message {
+  color: var(--green);
+}
+
+.speaker-library__error {
+  color: #ffb3bb;
+}
+
+.speaker-library__empty {
+  color: #6f8c82;
+}
+
+.speaker-library__list {
+  display: grid;
+  gap: 6px;
+}
+
+.speaker-library__item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 8px 9px;
+  border: 1px solid rgba(157, 199, 184, 0.1);
+  border-radius: 8px;
+  background: rgba(8, 24, 20, 0.45);
+}
+
+.speaker-library__item div {
+  display: grid;
+  gap: 2px;
+}
+
+.speaker-library__item strong {
+  color: #d8e8e2;
+  font-size: 11px;
+}
+
+.speaker-library__item span {
+  color: #6f8c82;
+  font-family: "SFMono-Regular", Consolas, monospace;
+  font-size: 9px;
+}
+
+.speaker-library__item button {
+  padding: 5px 7px;
+  border: 1px solid rgba(255, 130, 144, 0.2);
+  border-radius: 6px;
+  color: #ff9fa9;
+  background: transparent;
+  font-size: 10px;
+  cursor: pointer;
+}
+
+.session-audio {
+  display: grid;
+  gap: 6px;
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+}
+
+.session-audio span {
+  color: #b7cbc4;
+  font-size: 11px;
+}
+
+.session-audio audio {
+  width: 100%;
+  height: 32px;
+  opacity: 0.8;
 }
 
 .error-banner {
@@ -545,6 +703,31 @@ h2 {
   color: #e1eee9;
   font-size: 16px;
   line-height: 1.75;
+}
+
+.transcript-line__content {
+  display: grid;
+  gap: 7px;
+}
+
+.transcript-line__audio {
+  width: 100%;
+  height: 30px;
+  opacity: 0.78;
+}
+
+.transcript-line__speaker {
+  display: inline-block;
+  margin-right: 8px;
+  padding: 2px 6px;
+  border: 1px solid rgba(100, 243, 180, 0.22);
+  border-radius: 5px;
+  color: var(--green);
+  background: rgba(100, 243, 180, 0.06);
+  font-family: "SFMono-Regular", Consolas, monospace;
+  font-size: 9px;
+  letter-spacing: 0.04em;
+  vertical-align: 2px;
 }
 
 .transcript-line__latency {

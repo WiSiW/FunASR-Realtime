@@ -9,7 +9,7 @@ import pytest
 
 from backend.app.core.config import Settings
 from backend.app.services import model_daemon as model_daemon_client
-from backend.app.services.model_daemon import ModelDaemonClient
+from backend.app.services.model_daemon import DAEMON_PROTOCOL_VERSION, ModelDaemonClient
 from backend.scripts import model_daemon
 
 
@@ -42,11 +42,27 @@ class FakeStreamingModel:
         return FakeStreamingSession()
 
 
+class FakeSpeakerModel:
+    def embed(self, audio: np.ndarray, sr: int = 16000) -> np.ndarray:
+        return np.asarray([1.0, 0.0, 0.0], dtype=np.float32)
+
+    def ready(self) -> None:
+        return None
+
+
 class FakeModelRegistry:
-    def __init__(self, model_revision: str = "v2.0.4") -> None:
+    def __init__(
+        self,
+        model_revision: str = "v2.0.4",
+        speaker_model: str = "cam++",
+        speaker_model_revision: str = "master",
+    ) -> None:
         self.model_revision = model_revision
+        self.speaker_model = speaker_model
+        self.speaker_model_revision = speaker_model_revision
         self.offline = FakeOfflineModel()
         self.streaming = FakeStreamingModel()
+        self.speaker = FakeSpeakerModel()
 
     def preload(self, targets) -> None:
         return None
@@ -57,8 +73,16 @@ class FakeModelRegistry:
     def get_streaming(self) -> FakeStreamingModel:
         return self.streaming
 
+    def get_speaker(self) -> FakeSpeakerModel:
+        return self.speaker
+
     def status(self) -> dict[str, bool]:
-        return {"offline_loaded": True, "streaming_loaded": True, "ready": True}
+        return {
+            "offline_loaded": True,
+            "streaming_loaded": True,
+            "speaker_loaded": True,
+            "ready": True,
+        }
 
 
 def test_model_daemon_protocol(monkeypatch) -> None:
@@ -98,6 +122,13 @@ def test_model_daemon_protocol(monkeypatch) -> None:
         )
         assert offline["text"] == "fake:1600:16000"
 
+        speaker = client.request(
+            {"op": "speaker_embed", "audio": audio, "sr": 16000},
+            timeout=2.0,
+        )
+        assert speaker["embedding"] == [1.0, 0.0, 0.0]
+        assert client.request({"op": "speaker_ready"}, timeout=2.0) == {"ready": True}
+
         created = client.request({"op": "stream_new"}, timeout=2.0)
         session_id = created["session_id"]
         fed = client.request(
@@ -131,6 +162,8 @@ def test_model_daemon_state_operations(monkeypatch) -> None:
 
     audio = np.arange(1200, dtype=np.float32)
     assert state.offline_transcribe(audio, 16000)["text"] == "fake:1200:16000"
+    assert state.speaker_embed(audio, 16000)["embedding"] == [1.0, 0.0, 0.0]
+    assert state.speaker_ready() == {"ready": True}
 
     session_id = state.stream_new()["session_id"]
     assert state.stream_feed(session_id, audio)["partials"] == ["p1200"]
@@ -250,7 +283,11 @@ def test_model_daemon_pipe_protocol(monkeypatch) -> None:
 
 
 def test_ensure_model_daemon_reuses_running_process(monkeypatch) -> None:
-    monkeypatch.setattr(model_daemon_client, "_ping", lambda client: True)
+    monkeypatch.setattr(
+        model_daemon_client,
+        "_ping_result",
+        lambda client: {"protocol_version": DAEMON_PROTOCOL_VERSION},
+    )
 
     client, started = model_daemon_client.ensure_model_daemon(Settings())
 
@@ -260,11 +297,12 @@ def test_ensure_model_daemon_reuses_running_process(monkeypatch) -> None:
 
 def test_ensure_model_daemon_starts_when_missing(monkeypatch) -> None:
     started_processes: list[Settings] = []
-    # First ping fails, then the freshly started daemon responds.
-    ping_results = iter([False, True])
+    ping_results = iter(
+        [None, {"protocol_version": DAEMON_PROTOCOL_VERSION}]
+    )
     monkeypatch.setattr(
         model_daemon_client,
-        "_ping",
+        "_ping_result",
         lambda client: next(ping_results),
     )
     monkeypatch.setattr(
@@ -283,7 +321,7 @@ def test_ensure_model_daemon_starts_when_missing(monkeypatch) -> None:
 def test_ensure_model_daemon_requires_running_process_when_autostart_disabled(
     monkeypatch,
 ) -> None:
-    monkeypatch.setattr(model_daemon_client, "_ping", lambda client: False)
+    monkeypatch.setattr(model_daemon_client, "_ping_result", lambda client: None)
 
     with pytest.raises(model_daemon_client.ModelDaemonError, match="已禁用自动启动"):
         model_daemon_client.ensure_model_daemon(
@@ -292,3 +330,36 @@ def test_ensure_model_daemon_requires_running_process_when_autostart_disabled(
                 model_daemon_start_timeout=0.01,
             )
         )
+
+
+def test_ensure_model_daemon_restarts_old_protocol(monkeypatch) -> None:
+    stopped: list[bool] = []
+    started: list[Settings] = []
+    ping_results = iter(
+        [
+            {"protocol_version": 1},
+            {"protocol_version": DAEMON_PROTOCOL_VERSION},
+        ]
+    )
+    monkeypatch.setattr(
+        model_daemon_client,
+        "_ping_result",
+        lambda client: next(ping_results),
+    )
+    monkeypatch.setattr(
+        model_daemon_client,
+        "_stop_old_daemon",
+        lambda client: stopped.append(True),
+    )
+    monkeypatch.setattr(
+        model_daemon_client,
+        "_start_model_daemon",
+        lambda settings: started.append(settings),
+    )
+
+    client, daemon_started = model_daemon_client.ensure_model_daemon(Settings())
+
+    assert isinstance(client, ModelDaemonClient)
+    assert stopped == [True]
+    assert len(started) == 1
+    assert daemon_started is True

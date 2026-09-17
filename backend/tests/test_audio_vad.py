@@ -65,3 +65,23 @@ def test_flush_forces_active_short_utterance() -> None:
     assert utterance is not None
     assert utterance.size == 1600
     assert vad.flush() is None
+
+
+def test_pre_roll_keeps_audio_before_threshold_crossing() -> None:
+    vad = EnergyVAD(
+        16000,
+        0.02,
+        0.2,
+        0.1,
+        2.0,
+        pre_roll_sec=0.2,
+    )
+
+    vad.accept(block(0.0))
+    started = vad.accept(block(0.1))
+    vad.accept(block(0.0))
+    ended = vad.accept(block(0.0))
+
+    assert started.speech_started is True
+    assert ended.utterance is not None
+    assert ended.utterance.size == 6400

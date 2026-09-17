@@ -7,8 +7,9 @@ interface MicrophoneCallbacks {
 }
 
 interface PcmCaptureMessage {
-  samples: Float32Array
-  level: number
+  samples?: Float32Array
+  level?: number
+  flushed?: boolean
 }
 
 export function useMicrophone() {
@@ -21,6 +22,7 @@ export function useMicrophone() {
   let sourceNode: MediaStreamAudioSourceNode | null = null
   let workletNode: AudioWorkletNode | null = null
   let silentGain: GainNode | null = null
+  let resolveFlush: (() => void) | null = null
 
   async function start(callbacks: MicrophoneCallbacks): Promise<void> {
     if (capturing.value) {
@@ -61,7 +63,15 @@ export function useMicrophone() {
       )
 
       workletNode.port.onmessage = (event: MessageEvent<PcmCaptureMessage>) => {
+        if (event.data.flushed) {
+          resolveFlush?.()
+          resolveFlush = null
+          return
+        }
         const { samples, level: currentLevel } = event.data
+        if (!samples || currentLevel === undefined) {
+          return
+        }
         if (samples.length === 0) {
           return
         }
@@ -88,6 +98,7 @@ export function useMicrophone() {
   async function stop(): Promise<void> {
     capturing.value = false
     level.value = 0
+    await flushWorklet()
     workletNode?.port.close()
     workletNode?.disconnect()
     sourceNode?.disconnect()
@@ -103,6 +114,24 @@ export function useMicrophone() {
     silentGain = null
     mediaStream = null
     audioContext = null
+  }
+
+  function flushWorklet(): Promise<void> {
+    const node = workletNode
+    if (!node) {
+      return Promise.resolve()
+    }
+    return new Promise((resolve) => {
+      const timer = window.setTimeout(() => {
+        resolveFlush = null
+        resolve()
+      }, 200)
+      resolveFlush = () => {
+        window.clearTimeout(timer)
+        resolve()
+      }
+      node.port.postMessage({ type: 'flush' })
+    })
   }
 
   onBeforeUnmount(() => {

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import gc
 import threading
 
 from backend.app.services.asr import ASR
@@ -50,6 +51,18 @@ class ModelRegistry:
                     )
         return self._speaker
 
+    def release_offline(self) -> None:
+        """Unload the offline ASR model to keep memory pressure bounded."""
+        with self._lock:
+            self._offline = None
+        gc.collect()
+
+    def release_streaming(self) -> None:
+        """Unload the streaming ASR model to keep memory pressure bounded."""
+        with self._lock:
+            self._streaming = None
+        gc.collect()
+
     def preload(self, targets: tuple[str, ...] | list[str] | set[str]) -> None:
         """Load selected models sequentially before the API accepts requests."""
         requested = set(targets)
@@ -69,5 +82,5 @@ class ModelRegistry:
             "offline_loaded": self._offline is not None,
             "streaming_loaded": self._streaming is not None,
             "speaker_loaded": self._speaker is not None,
-            "ready": self._offline is not None and self._streaming is not None,
+            "ready": self._offline is not None or self._streaming is not None,
         }

@@ -25,6 +25,11 @@ class SlowOfflineModel:
         return "慢速识别完成"
 
 
+class PostprocessOfflineModel:
+    def transcribe(self, audio: np.ndarray) -> str:
+        return "嗯，我我我觉得这个方案可以。然后明天继续。"
+
+
 class FakeStreamingSession:
     active = False
 
@@ -248,6 +253,54 @@ def test_auto_websocket_includes_speaker_id() -> None:
                         final = event
                 assert final["data"]["speaker_id"] == "speaker_01"
                 assert final["data"]["audio_id"]
+        finally:
+            app.state.models = original_registry
+
+
+def test_auto_websocket_applies_postprocess_and_sentence_split() -> None:
+    with TestClient(app) as client:
+        original_registry = app.state.models
+        app.state.models = FakeModelRegistry(offline_model=PostprocessOfflineModel())
+        try:
+            with client.websocket_connect("/api/v1/asr/stream") as websocket:
+                assert websocket.receive_json()["type"] == "connected"
+                websocket.send_json(
+                    {
+                        "type": "start",
+                        "request_id": "start-postprocess",
+                        "data": {
+                            "mode": "auto",
+                            "vad": {
+                                "energy_threshold": 0.02,
+                                "hangover_sec": 0.1,
+                                "min_speech_sec": 0.1,
+                                "max_speech_sec": 2,
+                            },
+                            "speaker": {"enabled": False},
+                        },
+                    }
+                )
+                assert websocket.receive_json()["type"] == "ready"
+                assert websocket.receive_json()["data"]["state"] == "listening"
+
+                websocket.send_bytes(pcm_block(12000))
+                while True:
+                    event = websocket.receive_json()
+                    if event["type"] == "status" and event["data"]["state"] == "speech":
+                        break
+                websocket.send_bytes(pcm_block(0))
+
+                finals = []
+                while len(finals) < 2:
+                    event = websocket.receive_json()
+                    if event["type"] == "final":
+                        finals.append(event)
+
+                assert [item["data"]["text"] for item in finals] == [
+                    "我觉得这个方案可以。",
+                    "然后明天继续。",
+                ]
+                assert all("speaker_id" not in item["data"] for item in finals)
         finally:
             app.state.models = original_registry
 

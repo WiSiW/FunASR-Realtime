@@ -448,6 +448,75 @@ h2 {
   justify-self: end;
 }
 
+.advanced-panel .check-row {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 8px;
+  align-items: center;
+  padding: 9px 0 2px;
+}
+
+.advanced-panel .check-row > span {
+  display: grid;
+  color: #b7cbc4;
+}
+
+.toggle-switch {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 7px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: #7f9c91;
+  background: rgba(8, 24, 20, 0.75);
+  font-size: 10px;
+  cursor: pointer;
+}
+
+.toggle-switch i {
+  display: block;
+  width: 20px;
+  height: 11px;
+  border-radius: 999px;
+  background: rgba(127, 156, 145, 0.28);
+  transition: background 0.15s ease;
+}
+
+.toggle-switch i::after {
+  display: block;
+  width: 7px;
+  height: 7px;
+  margin: 2px;
+  border-radius: 50%;
+  background: #b4c9c1;
+  content: '';
+  transition: transform 0.15s ease;
+}
+
+.toggle-switch.on {
+  color: var(--green);
+  border-color: rgba(100, 243, 180, 0.3);
+}
+
+.toggle-switch.on i {
+  background: rgba(100, 243, 180, 0.35);
+}
+
+.toggle-switch.on i::after {
+  background: var(--green);
+  transform: translateX(9px);
+}
+
+.toggle-switch:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+.toggle-switch em {
+  font-style: normal;
+}
+
 .advanced-panel label span {
   display: grid;
   color: #b7cbc4;

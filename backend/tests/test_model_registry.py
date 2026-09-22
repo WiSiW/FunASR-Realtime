@@ -58,3 +58,19 @@ def test_preload_rejects_unknown_model() -> None:
 
     with pytest.raises(ValueError, match="未知预加载模型"):
         registry.preload(("offline", "unknown"))
+
+
+def test_release_offline_and_streaming(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(model_registry, "ASR", FakeOfflineModel)
+    monkeypatch.setattr(model_registry, "StreamingASR", FakeStreamingModel)
+    monkeypatch.setattr(model_registry, "SpeakerEmbeddingModel", FakeSpeakerModel)
+    registry = model_registry.ModelRegistry()
+    registry.preload(("offline", "streaming", "speaker"))
+
+    registry.release_offline()
+    assert registry.status()["offline_loaded"] is False
+    assert registry.status()["streaming_loaded"] is True
+
+    registry.release_streaming()
+    assert registry.status()["streaming_loaded"] is False
+    assert registry.status()["speaker_loaded"] is True

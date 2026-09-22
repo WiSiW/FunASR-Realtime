@@ -25,6 +25,7 @@ from backend.app.services.audio_vad import EnergyVAD, rms_energy
 from backend.app.services.model_registry import ModelRegistry
 from backend.app.services.speaker import SpeakerAssignment, SpeakerTracker
 from backend.app.services.speaker_store import SpeakerProfileStore
+from backend.app.services.text_postprocess import TextPostProcessor
 
 logger = logging.getLogger(__name__)
 
@@ -45,6 +46,7 @@ class RecognitionSession:
         self.settings = settings
         self.speaker_store = speaker_store
         self.audio_store = audio_store
+        self.text_postprocessor: TextPostProcessor | None = None
         self.session_id = uuid.uuid4().hex
         self.options: StartOptions | None = None
         self.active = False
@@ -84,6 +86,15 @@ class RecognitionSession:
         self._push_blocks = []
         self._push_samples = 0
         self._partial_text = ""
+        if self.settings.asr_postprocess_enabled:
+            self.text_postprocessor = TextPostProcessor(
+                correction_file=self.settings.asr_correction_file or None,
+                clean_fillers=self.settings.asr_clean_fillers,
+                max_sentence_chars=self.settings.asr_max_sentence_chars,
+                min_sentence_chars=self.settings.asr_min_sentence_chars,
+            )
+        else:
+            self.text_postprocessor = None
         if self.audio_store is not None:
             await asyncio.to_thread(
                 self.audio_store.create_session,
@@ -354,8 +365,6 @@ class RecognitionSession:
         self._stream_pre_roll = np.zeros(0, dtype=np.float32)
 
     async def _transcribe_offline(self, audio: np.ndarray) -> None:
-        self._segment_index += 1
-        segment_id = f"seg-{self._segment_index:04d}"
         audio_id: str | None = None
         if self.audio_store is not None:
             audio_id = uuid.uuid4().hex
@@ -382,23 +391,39 @@ class RecognitionSession:
             assignment = None
 
         elapsed_ms = round((time.time() - started) * 1000)
-        data: dict = {
-            "session_id": self.session_id,
-            "segment_id": segment_id,
-            "text": text,
-            "duration_ms": round(audio.size / 16000 * 1000),
-            "latency_ms": elapsed_ms,
-        }
-        if audio_id is not None:
-            data["audio_id"] = audio_id
-        data.update(self._speaker_event_fields(assignment))
-        await self._send(
-            event(
-                "final",
-                data=data,
-            )
-        )
+        sentences = self._postprocess_sentences(text)
+        sentence_count = len(sentences)
+        for index, sentence in enumerate(sentences):
+            self._segment_index += 1
+            data: dict = {
+                "session_id": self.session_id,
+                "segment_id": f"seg-{self._segment_index:04d}",
+                "text": sentence,
+                "duration_ms": round(audio.size / 16000 * 1000),
+                "latency_ms": elapsed_ms,
+                "sentence_index": index,
+                "sentence_count": sentence_count,
+            }
+            if audio_id is not None:
+                data["audio_id"] = audio_id
+            data.update(self._speaker_event_fields(assignment))
+            await self._send(event("final", data=data))
         await self._send_status("listening")
+
+    def _postprocess_sentences(self, text: str) -> list[str]:
+        cleaned = str(text or "").strip()
+        if not cleaned:
+            return []
+        if self.text_postprocessor is None:
+            return [cleaned]
+        sentences = self.text_postprocessor.process(cleaned)
+        return sentences or [cleaned]
+
+    def _polish_text(self, text: str) -> str:
+        cleaned = str(text or "")
+        if self.text_postprocessor is None:
+            return cleaned
+        return self.text_postprocessor.polish(cleaned)
 
     async def _safe_assign_speaker(
         self,
@@ -507,10 +532,11 @@ class RecognitionSession:
             for piece in partials:
                 self._partial_text = merge_stream_text(self._partial_text, piece)
             if self._partial_text and self._partial_text != previous_text:
+                display_text = self._polish_text(self._partial_text)
                 data: dict = {
                     "session_id": self.session_id,
                     "segment_id": f"seg-{self._segment_index + 1:04d}",
-                    "text": self._partial_text,
+                    "text": display_text,
                 }
                 if self.speaker_tracker is not None:
                     if self._stream_speaker_id is not None:
@@ -560,7 +586,6 @@ class RecognitionSession:
             self._partial_text = merge_stream_text(self._partial_text, piece)
         text = self._partial_text.strip()
         if text:
-            self._segment_index += 1
             audio_id: str | None = None
             if self.audio_store is not None and speaker_audio.size > 0:
                 audio_id = uuid.uuid4().hex
@@ -572,23 +597,24 @@ class RecognitionSession:
                 )
             if assignment is not None:
                 self._stream_speaker_id = assignment.speaker_id
-            data: dict = {
-                "session_id": self.session_id,
-                "segment_id": f"seg-{self._segment_index:04d}",
-                "text": text,
-            }
-            if assignment is not None:
-                data.update(self._speaker_event_fields(assignment))
-            elif self.speaker_tracker is not None and self._stream_speaker_id is not None:
-                data["speaker_id"] = self._stream_speaker_id
-            if audio_id is not None:
-                data["audio_id"] = audio_id
-            await self._send(
-                event(
-                    "final",
-                    data=data,
-                )
-            )
+            sentences = self._postprocess_sentences(text)
+            sentence_count = len(sentences)
+            for index, sentence in enumerate(sentences):
+                self._segment_index += 1
+                data: dict = {
+                    "session_id": self.session_id,
+                    "segment_id": f"seg-{self._segment_index:04d}",
+                    "text": sentence,
+                    "sentence_index": index,
+                    "sentence_count": sentence_count,
+                }
+                if assignment is not None:
+                    data.update(self._speaker_event_fields(assignment))
+                elif self.speaker_tracker is not None and self._stream_speaker_id is not None:
+                    data["speaker_id"] = self._stream_speaker_id
+                if audio_id is not None:
+                    data["audio_id"] = audio_id
+                await self._send(event("final", data=data))
         self._partial_text = ""
         await self._reset_stream_speaker_state()
         self._clear_stream_pre_roll()

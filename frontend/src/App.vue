@@ -127,17 +127,28 @@ function audioUrl(audioId: string): string {
             />
             <output>{{ energyThreshold.toFixed(3) }}</output>
           </label>
-          <label class="check-row">
+          <div class="check-row">
             <span>
               说话人识别
-              <small>使用 speaker_01、speaker_02… 标记当前说话人</small>
+              <small>
+                {{
+                  speakerEnabled
+                    ? '已开启：提取声纹并标记 speaker_01、speaker_02…'
+                    : '已关闭：不做声纹提取，也不显示说话人'
+                }}
+              </small>
             </span>
-            <input
-              v-model="speakerEnabled"
-              type="checkbox"
+            <button
+              class="toggle-switch"
+              :class="{ on: speakerEnabled }"
+              type="button"
               :disabled="active || busy"
-            />
-          </label>
+              @click="speakerEnabled = !speakerEnabled"
+            >
+              <i />
+              <em>{{ speakerEnabled ? '开启' : '关闭' }}</em>
+            </button>
+          </div>
         </details>
 
         <SpeakerLibrary :disabled="active || busy" />

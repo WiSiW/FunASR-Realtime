@@ -17,7 +17,9 @@ import uuid
 from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
+from multiprocessing import AuthenticationError
 from multiprocessing.connection import Connection, Listener
+from pathlib import Path
 from typing import Any
 
 import numpy as np
@@ -29,6 +31,7 @@ from backend.app.services.model_daemon import (
     DAEMON_PROTOCOL_VERSION,
     ModelDaemonClient,
     ModelDaemonError,
+    stop_model_daemon,
 )
 from backend.app.services.model_registry import ModelRegistry
 
@@ -71,9 +74,26 @@ class ModelDaemonState:
             speaker_model_revision=self.settings.speaker_model_revision,
         )
         selected = self.settings.preload_models if targets is None else tuple(targets)
+        if self.settings.model_daemon_single_asr_model:
+            selected = self._limit_preload_targets(selected)
         if selected:
             models.preload(selected)
         return models
+
+    @staticmethod
+    def _limit_preload_targets(
+        targets: tuple[str, ...] | list[str],
+    ) -> tuple[str, ...]:
+        """Keep at most one large ASR model resident at daemon startup."""
+        selected: list[str] = []
+        asr_selected = False
+        for target in targets:
+            if target in {"offline", "streaming"}:
+                if asr_selected:
+                    continue
+                asr_selected = True
+            selected.append(target)
+        return tuple(selected)
 
     @contextmanager
     def _request(self) -> Iterator[None]:
@@ -127,7 +147,13 @@ class ModelDaemonState:
 
     def offline_transcribe(self, audio: np.ndarray, sr: int) -> dict[str, str]:
         with self._request():
-            text = self._models.get_offline().transcribe(audio, sr)
+            model = self._models.get_offline()
+            if self.settings.model_daemon_single_asr_model:
+                with self._state_lock:
+                    has_stream_sessions = bool(self._sessions)
+                if not has_stream_sessions:
+                    self._models.release_streaming()
+            text = model.transcribe(audio, sr)
             return {"text": text}
 
     def speaker_embed(self, audio: np.ndarray, sr: int) -> dict[str, Any]:
@@ -145,6 +171,13 @@ class ModelDaemonState:
 
     def stream_new(self) -> dict[str, str]:
         with self._request():
+            self._models.get_streaming()
+            if self.settings.model_daemon_single_asr_model:
+                with self._state_lock:
+                    has_other_requests = self._active_requests > 1
+                    has_stream_sessions = bool(self._sessions)
+                if not has_other_requests and not has_stream_sessions:
+                    self._models.release_offline()
             session = self._models.get_streaming().new_session()
 
         session_id = uuid.uuid4().hex
@@ -249,6 +282,7 @@ def _handle_connection(connection: Connection, state: ModelDaemonState) -> None:
         if request.get("op") == "shutdown":
             # The main thread is blocked in Listener.accept(); exit directly
             # after the client has received the acknowledgement.
+            _remove_pid_file(state.settings)
             os._exit(0)
     except Exception as exc:
         logger.exception("Model daemon request failed")
@@ -296,6 +330,23 @@ def _client(settings: Settings, host: str, port: int) -> ModelDaemonClient:
     return ModelDaemonClient(host, port, settings.model_daemon_authkey)
 
 
+def _write_pid_file(settings: Settings) -> None:
+    path = Path(settings.model_daemon_pid_file).expanduser()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(str(os.getpid()), encoding="utf-8")
+
+
+def _remove_pid_file(settings: Settings) -> None:
+    path = Path(settings.model_daemon_pid_file).expanduser()
+    try:
+        if path.read_text(encoding="utf-8").strip() == str(os.getpid()):
+            path.unlink(missing_ok=True)
+    except FileNotFoundError:
+        pass
+    except OSError:
+        logger.debug("无法清理模型服务 PID 文件", exc_info=True)
+
+
 def main() -> None:
     args = _build_parser().parse_args()
     configure_logging()
@@ -304,16 +355,21 @@ def main() -> None:
     port = args.port or settings.model_daemon_port
 
     if args.reload or args.stop:
+        if args.stop:
+            try:
+                result = stop_model_daemon(settings, host=host, port=port)
+            except ModelDaemonError as exc:
+                logger.error("模型服务停止失败: %s", exc)
+                raise SystemExit(1) from exc
+            logger.info("模型服务停止完成: %s", result)
+            return
+
         client = _client(settings, host, port)
-        operation = "reload" if args.reload else "shutdown"
-        payload: dict[str, Any] = {"op": operation}
-        if args.reload:
-            payload.update(
-                {
-                    "targets": list(settings.preload_models),
-                    "force": True,
-                }
-            )
+        payload: dict[str, Any] = {
+            "op": "reload",
+            "targets": list(settings.preload_models),
+            "force": True,
+        }
         try:
             result = client.request(payload, timeout=None)
         except ModelDaemonError as exc:
@@ -336,7 +392,12 @@ def main() -> None:
         return
 
     state = ModelDaemonState(settings)
-    listener = Listener((host, port), authkey=authkey)
+    listener = Listener(
+        (host, port),
+        authkey=authkey,
+        backlog=max(1, settings.model_daemon_backlog),
+    )
+    _write_pid_file(settings)
     logger.info("模型服务已启动: %s:%d pid=%d", host, port, os.getpid())
 
     try:
@@ -345,12 +406,20 @@ def main() -> None:
             thread_name_prefix="model-daemon",
         ) as executor:
             while True:
-                connection = listener.accept()
+                try:
+                    connection = listener.accept()
+                except AuthenticationError:
+                    logger.warning("模型服务拒绝了一个认证失败的连接")
+                    continue
+                except (EOFError, OSError):
+                    logger.exception("模型服务监听失败")
+                    break
                 executor.submit(_handle_connection, connection, state)
     except KeyboardInterrupt:
         logger.info("模型服务收到退出信号")
     finally:
         listener.close()
+        _remove_pid_file(settings)
 
 
 if __name__ == "__main__":

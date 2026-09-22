@@ -76,6 +76,12 @@ class FakeModelRegistry:
     def get_speaker(self) -> FakeSpeakerModel:
         return self.speaker
 
+    def release_offline(self) -> None:
+        return None
+
+    def release_streaming(self) -> None:
+        return None
+
     def status(self) -> dict[str, bool]:
         return {
             "offline_loaded": True,
@@ -233,6 +239,26 @@ def test_model_daemon_client_error(monkeypatch) -> None:
         client.request({"op": "reload"}, timeout=1.0)
 
 
+def test_model_daemon_client_retries_connection_reset(monkeypatch) -> None:
+    fake_connection = FakeConnection({"ok": True, "result": {"value": 7}})
+    attempts = 0
+
+    def fake_client(*args, **kwargs):
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise ConnectionResetError("reset during auth")
+        return fake_connection
+
+    monkeypatch.setattr(model_daemon_client, "Client", fake_client)
+    monkeypatch.setattr(model_daemon_client.time, "sleep", lambda _: None)
+
+    client = ModelDaemonClient("127.0.0.1", 8765, "secret")
+
+    assert client.request({"op": "ping"}, timeout=1.0) == {"value": 7}
+    assert attempts == 2
+
+
 def test_model_daemon_handle_connection(monkeypatch) -> None:
     monkeypatch.setattr(model_daemon, "ModelRegistry", FakeModelRegistry)
     state = model_daemon.ModelDaemonState(
@@ -297,6 +323,7 @@ def test_ensure_model_daemon_reuses_running_process(monkeypatch) -> None:
 
 def test_ensure_model_daemon_starts_when_missing(monkeypatch) -> None:
     started_processes: list[Settings] = []
+    monkeypatch.setattr(model_daemon_client, "_port_in_use", lambda host, port: False)
     ping_results = iter(
         [None, {"protocol_version": DAEMON_PROTOCOL_VERSION}]
     )
@@ -349,7 +376,7 @@ def test_ensure_model_daemon_restarts_old_protocol(monkeypatch) -> None:
     monkeypatch.setattr(
         model_daemon_client,
         "_stop_old_daemon",
-        lambda client: stopped.append(True),
+        lambda client, settings: stopped.append(True),
     )
     monkeypatch.setattr(
         model_daemon_client,

@@ -128,6 +128,8 @@ Vite 会把 `/api`（包含 WebSocket）代理到 `http://127.0.0.1:8000`。需�
 
 说话人识别默认开启。每次开始识别独立编号：
 
+前端“识别设置”中提供明确的“开启/关闭”开关；关闭后不会提取声纹，也不会显示说话人标签。
+
 - 会话中第一个稳定说话人标记为 `speaker_01`
 - 后续新说话人依次标记为 `speaker_02`、`speaker_03`...
 - 识别结果会在前端显示说话人标签，复制和导出文本时也会带上 `[speaker_01]` 前缀
@@ -189,6 +191,39 @@ FUNASR_SPEAKER_ENROLLED_MATCH_THRESHOLD=0.70
 
 注册说话人没有被识别出来时，可以适当降低该阈值；不同注册人被误匹配时，可以提高该阈值。
 
+## ASR 文本后处理
+
+识别结果会经过一层保守后处理：
+
+1. **纠错**：修正常见 ASR 错别字/同音词，例如“因该”→“应该”、“帐号”→“账号”。
+2. **口语清洗**：只清理纯语气词和结巴重复，例如“嗯，我我我觉得”→“我觉得”。
+   不会简单删除“然后、就是、这个、那个”等可能承载语义的口语词。
+3. **断句**：优先按 `。！？；` 分句，过长时再按逗号切分，并把过短句子合并。
+
+配置：
+
+```env
+FUNASR_ASR_POSTPROCESS=true
+FUNASR_ASR_CLEAN_FILLERS=true
+FUNASR_ASR_MAX_SENTENCE_CHARS=40
+FUNASR_ASR_MIN_SENTENCE_CHARS=6
+```
+
+自定义纠错词表使用 JSON 对象：
+
+```json
+{
+  "测是": "测试",
+  "联习": "练习"
+}
+```
+
+配置路径：
+
+```env
+FUNASR_ASR_CORRECTION_FILE=/path/to/corrections.json
+```
+
 ## 模型常驻与预加载
 
 后端默认使用独立的常驻模型服务。模型只在第一次启动常驻服务时加载到内存；之后 API 进程重启只会连接这个服务，不会再次加载权重。
@@ -233,6 +268,8 @@ FUNASR_PRELOAD_STRICT=true
 - 模型文件缓存默认由 ModelScope 管理，只有文件缺失时才需要重新下载。
 - 常驻服务默认监听 `127.0.0.1:8765`，日志默认在
   `~/.cache/funasr-realtime/model-daemon.log`。
+- 默认只驻留 `offline` / `streaming` 中的一个 ASR 模型，切换模式时自动释放另一个，避免
+  Intel Mac 等内存较小机器同时加载多套模型后卡死。
 
 ## Docker 打包部署
 
@@ -387,6 +424,9 @@ make build      # 前端生产构建
 | `FUNASR_MODEL_DAEMON_AUTHKEY` | `funasr-realtime-model-daemon` | 本地连接认证密钥 |
 | `FUNASR_MODEL_DAEMON_START_TIMEOUT` | `600` | 首次启动等待模型加载的超时秒数 |
 | `FUNASR_MODEL_DAEMON_SESSION_TTL` | `1800` | 无主流式会话自动清理秒数 |
+| `FUNASR_MODEL_DAEMON_BACKLOG` | `64` | daemon TCP 连接排队长度，避免并发连接被 reset |
+| `FUNASR_MODEL_DAEMON_SINGLE_ASR_MODEL` | `true` | 只驻留一个 ASR 模型，降低内存压力 |
+| `FUNASR_MODEL_DAEMON_PID_FILE` | `~/.cache/funasr-realtime/model-daemon.pid` | daemon PID 文件，用于异常停止恢复 |
 | `FUNASR_RELOAD_MODELS` | `false` | API 启动时是否强制重载常驻模型 |
 | `FUNASR_SPEAKER_ENABLED` | `true` | 是否启用说话人识别 |
 | `FUNASR_SPEAKER_MODEL` | `cam++` | 说话人 embedding 模型 |
@@ -401,6 +441,11 @@ make build      # 前端生产构建
 | `FUNASR_SPEAKER_EMBEDDING_WINDOW_SEC` | `1.5` | 流式声纹窗口长度 |
 | `FUNASR_SPEAKER_EMBEDDING_INTERVAL_SEC` | `0.8` | 流式声纹更新间隔 |
 | `FUNASR_SPEAKER_CENTROID_UPDATE_ALPHA` | `0.1` | 说话人中心向量更新系数 |
+| `FUNASR_ASR_POSTPROCESS` | `true` | 是否启用纠错、口语清洗和断句 |
+| `FUNASR_ASR_CLEAN_FILLERS` | `true` | 是否清理纯语气词和结巴重复 |
+| `FUNASR_ASR_CORRECTION_FILE` | 空 | 自定义 ASR 纠错 JSON 文件 |
+| `FUNASR_ASR_MAX_SENTENCE_CHARS` | `40` | 单句最大字符数 |
+| `FUNASR_ASR_MIN_SENTENCE_CHARS` | `6` | 合并短句的最小字符数 |
 
 ## 排查
 
@@ -428,6 +473,9 @@ make build      # 前端生产构建
 - WebSocket 连接失败：确认后端运行在 `8000` 端口，且代理的 WebSocket 转发已开启。
 - WebSocket 经常断开：检查 Nginx/网关的 WebSocket 空闲超时，连接路径至少设置
   `proxy_read_timeout 3600s`、`proxy_send_timeout 3600s`，并关闭代理缓冲。
+- 出现 `Connection reset by peer` / `模型服务 127.0.0.1:8765`：通常是 daemon 内存压力过大
+  或旧进程卡死。先执行 `make model-daemon-stop`，再执行 `make dev-backend`。如果旧版本
+  没有 PID 文件，使用 `lsof -iTCP:8765 -sTCP:LISTEN` 找到 PID 后手动结束。
 - 短暂断线：识别过程中前端会自动重连；重连期间麦克风保持采集，但网络中断窗口内的音频会丢失。
 - 没有声音输入：在系统设置中确认默认输入设备，并关闭占用麦克风的其他应用。
 

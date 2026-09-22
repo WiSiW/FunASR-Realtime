@@ -61,11 +61,12 @@
 - `ready`：模型已加载，可以发送音频；包含 `session_audio_id`，可用于播放整段会话原音。
 - `status`：`listening`、`speech`、`processing`、`stopped` 状态变化。
 - `level`：麦克风 PCM 的 RMS 能量，约 10Hz。
-- `partial`：流式模式的临时累计文本；启用说话人识别时包含 `speaker_id`、
+- `partial`：流式模式的临时累计文本，已做纠错和保守口语清洗；启用说话人识别时包含 `speaker_id`、
   `speaker_name`、`speaker_enrolled`、`speaker_pending`。
 - `final`：一句识别完成，包含 `segment_id`、`text`、可选 `latency_ms`，以及
   `speaker_id`、`speaker_name`、`speaker_enrolled`、`speaker_confidence`、
-  `speaker_pending`、`speaker_is_new`、`audio_id`。
+  `speaker_pending`、`speaker_is_new`、`audio_id`。一段 VAD 语音经过断句后可能产生多个
+  `final` 事件，使用 `sentence_index` 和 `sentence_count` 表示句子序号。
 - `speaker`：流式模式检测到说话人新增或切换时发送，包含 `speaker_id` 和 `status`。
 - `stopped`：会话已结束，可以再次发送 `start`。
 - `error`：参数或服务端错误，包含 `code` 与 `message`。

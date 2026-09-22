@@ -1,4 +1,4 @@
-import { computed, onBeforeUnmount, ref } from 'vue'
+import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { AsrSocketClient } from '../services/asrSocket'
 import { useMicrophone } from './useMicrophone'
 import type {
@@ -11,6 +11,7 @@ import type {
 
 const WS_PATH = '/api/v1/asr/stream'
 const RECONNECT_DELAYS_MS = [800, 1600, 3200, 6400, 10_000, 15_000]
+const SPEAKER_ENABLED_STORAGE_KEY = 'funasr.speakerEnabled'
 
 export function useAsrSession() {
   const mode = ref<RecognitionMode>('auto')
@@ -20,8 +21,14 @@ export function useAsrSession() {
   const finals = ref<TranscriptSegment[]>([])
   const partial = ref<TranscriptSegment | null>(null)
   const energyThreshold = ref(0.012)
-  const speakerEnabled = ref(true)
+  const speakerEnabled = ref(
+    window.localStorage.getItem(SPEAKER_ENABLED_STORAGE_KEY) !== 'false',
+  )
   const sessionAudioId = ref('')
+
+  watch(speakerEnabled, (enabled) => {
+    window.localStorage.setItem(SPEAKER_ENABLED_STORAGE_KEY, String(enabled))
+  })
 
   const client = new AsrSocketClient()
   const microphone = useMicrophone()

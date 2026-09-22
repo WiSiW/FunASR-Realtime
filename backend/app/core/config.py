@@ -53,7 +53,10 @@ class Settings:
     model_daemon_start_timeout: float = 600.0
     model_daemon_session_ttl: float = 1800.0
     model_daemon_max_workers: int = 8
+    model_daemon_backlog: int = 64
     model_daemon_log: str = "~/.cache/funasr-realtime/model-daemon.log"
+    model_daemon_pid_file: str = "~/.cache/funasr-realtime/model-daemon.pid"
+    model_daemon_single_asr_model: bool = True
     reload_models: bool = False
     speaker_enabled: bool = True
     speaker_model: str = "cam++"
@@ -68,6 +71,11 @@ class Settings:
     speaker_embedding_window_sec: float = 1.5
     speaker_embedding_interval_sec: float = 0.8
     speaker_centroid_update_alpha: float = 0.1
+    asr_postprocess_enabled: bool = True
+    asr_clean_fillers: bool = True
+    asr_correction_file: str = ""
+    asr_max_sentence_chars: int = 40
+    asr_min_sentence_chars: int = 6
 
     @classmethod
     def from_env(cls) -> Settings:
@@ -121,8 +129,18 @@ class Settings:
             model_daemon_max_workers=_env_int(
                 "FUNASR_MODEL_DAEMON_MAX_WORKERS", cls.model_daemon_max_workers
             ),
+            model_daemon_backlog=_env_int(
+                "FUNASR_MODEL_DAEMON_BACKLOG", cls.model_daemon_backlog
+            ),
             model_daemon_log=os.getenv(
                 "FUNASR_MODEL_DAEMON_LOG", cls.model_daemon_log
+            ),
+            model_daemon_pid_file=os.getenv(
+                "FUNASR_MODEL_DAEMON_PID_FILE", cls.model_daemon_pid_file
+            ),
+            model_daemon_single_asr_model=_env_bool(
+                "FUNASR_MODEL_DAEMON_SINGLE_ASR_MODEL",
+                cls.model_daemon_single_asr_model,
             ),
             reload_models=_env_bool("FUNASR_RELOAD_MODELS", cls.reload_models),
             speaker_enabled=_env_bool("FUNASR_SPEAKER_ENABLED", cls.speaker_enabled),
@@ -165,5 +183,25 @@ class Settings:
             speaker_centroid_update_alpha=_env_float(
                 "FUNASR_SPEAKER_CENTROID_UPDATE_ALPHA",
                 cls.speaker_centroid_update_alpha,
+            ),
+            asr_postprocess_enabled=_env_bool(
+                "FUNASR_ASR_POSTPROCESS",
+                cls.asr_postprocess_enabled,
+            ),
+            asr_clean_fillers=_env_bool(
+                "FUNASR_ASR_CLEAN_FILLERS",
+                cls.asr_clean_fillers,
+            ),
+            asr_correction_file=os.getenv(
+                "FUNASR_ASR_CORRECTION_FILE",
+                cls.asr_correction_file,
+            ),
+            asr_max_sentence_chars=_env_int(
+                "FUNASR_ASR_MAX_SENTENCE_CHARS",
+                cls.asr_max_sentence_chars,
+            ),
+            asr_min_sentence_chars=_env_int(
+                "FUNASR_ASR_MIN_SENTENCE_CHARS",
+                cls.asr_min_sentence_chars,
             ),
         )

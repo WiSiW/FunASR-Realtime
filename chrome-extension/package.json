@@ -1,0 +1,14 @@
+{
+  "name": "funasr-realtime-chrome-extension",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Manifest V3 Chrome extension for tab audio transcription.",
+  "type": "module",
+  "scripts": {
+    "check": "node scripts/check.mjs",
+    "smoke:browser": "node scripts/browser-smoke.mjs"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

@@ -1,7 +1,7 @@
 PYTHON ?= .venv/bin/python
 PIP ?= $(PYTHON) -m pip
 
-.PHONY: install install-backend install-frontend dev-backend dev-backend-watch dev-backend-reload-models model-daemon model-daemon-reload model-daemon-stop dev-frontend test lint build docker-build docker-up docker-down docker-reload-models docker-logs docker-preload clean
+.PHONY: install install-backend install-frontend dev-backend dev-backend-watch dev-backend-reload-models model-daemon model-daemon-reload model-daemon-stop dev-frontend check-extension test lint build docker-build docker-up docker-down docker-reload-models docker-logs docker-preload clean
 
 install: install-backend install-frontend
 
@@ -32,9 +32,13 @@ model-daemon-stop:
 dev-frontend:
 	npm --prefix frontend run dev
 
+check-extension:
+	npm --prefix chrome-extension run check
+
 test:
 	$(PYTHON) -m pytest
 	npm --prefix frontend run typecheck
+	npm --prefix chrome-extension run check
 
 lint:
 	$(PYTHON) -m ruff check backend

@@ -1,0 +1,136 @@
+:root {
+  color: #e7edf3;
+  background: #0d1117;
+  font-family:
+    Inter, "PingFang SC", "Microsoft YaHei", system-ui, -apple-system, sans-serif;
+  --line: #2a3742;
+  --muted: #91a0ad;
+  --cyan: #55d6c2;
+  --danger: #f07b82;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  min-width: 520px;
+  min-height: 100vh;
+  margin: 0;
+  padding: 34px;
+  background: #0d1117;
+}
+
+main {
+  width: min(620px, 100%);
+  margin: 0 auto;
+}
+
+header {
+  display: flex;
+  align-items: center;
+  gap: 13px;
+  margin-bottom: 24px;
+}
+
+.brand-mark {
+  display: grid;
+  width: 44px;
+  height: 44px;
+  place-items: center;
+  border: 1px solid #34766d;
+  border-radius: 8px;
+  color: var(--cyan);
+  background: #14312e;
+  font-family: "SFMono-Regular", Consolas, monospace;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+h1 {
+  margin: 0;
+  font-size: 20px;
+}
+
+header p {
+  margin: 4px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+section {
+  display: grid;
+  gap: 10px;
+  padding: 20px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #141b23;
+}
+
+label {
+  color: #b3bec8;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+input {
+  width: 100%;
+  height: 38px;
+  padding: 0 11px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  color: #e7edf3;
+  background: #0d141b;
+  font-family: "SFMono-Regular", Consolas, monospace;
+  font-size: 12px;
+}
+
+button {
+  height: 40px;
+  border: 1px solid #3b9f92;
+  border-radius: 6px;
+  color: #082b27;
+  background: var(--cyan);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+button:disabled {
+  cursor: wait;
+  opacity: 0.55;
+}
+
+#statusMessage {
+  min-height: 20px;
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+}
+
+#statusMessage.success {
+  color: var(--cyan);
+}
+
+#statusMessage.error {
+  color: var(--danger);
+}
+
+aside {
+  margin-top: 14px;
+  padding: 13px 15px;
+  border-left: 3px solid #b9883f;
+  color: #aeb9c2;
+  background: #1b1a16;
+  font-size: 12px;
+  line-height: 1.65;
+}
+
+button:focus-visible,
+input:focus-visible {
+  outline: 2px solid var(--cyan);
+  outline-offset: 2px;
+}

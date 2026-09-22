@@ -6,6 +6,7 @@
 ## 功能
 
 - Vue 3 + TypeScript + Vite 前端
+- Manifest V3 Chrome 扩展，可采集当前标签页音频并调用同一转写接口
 - AudioWorklet 浏览器麦克风采集，实时重采样为 16kHz 单声道 PCM
 - FastAPI WebSocket 长连接，支持一个连接多次启动/停止识别
 - 15 秒应用层心跳、10 秒超时检测和指数退避自动重连
@@ -57,6 +58,14 @@ FunASR-test/
 │   ├── Dockerfile
 │   ├── nginx.conf
 │   └── vite.config.ts
+├── chrome-extension/
+│   ├── manifest.json              # Manifest V3 配置
+│   ├── audio/                     # 标签页 PCM AudioWorklet
+│   ├── popup/                     # 扩展弹窗界面
+│   ├── shared/                    # WebSocket、重采样和协议工具
+│   └── src/
+│       ├── background.js          # tabCapture 与会话状态协调
+│       └── offscreen.js           # 持续采集与转写连接
 ├── docker-compose.yml
 ├── docs/protocol.md
 ├── main.py                        # CLI 兼容入口
@@ -112,6 +121,17 @@ make dev-frontend
 浏览器打开 <http://localhost:5173>，选择识别模式，点击“开始识别”，然后允许麦克风权限。
 
 Vite 会把 `/api`（包含 WebSocket）代理到 `http://127.0.0.1:8000`。需要修改后端地址时，复制 `.env.example` 为 `frontend/.env.local` 并配置 `VITE_API_TARGET`。
+
+## Chrome 扩展
+
+仓库中的 `chrome-extension/` 是无需构建的 Manifest V3 项目，用于采集当前标签页音频并调用相同的 `/api/v1/asr/stream` 接口。
+
+1. 运行 `make dev-backend`。
+2. 打开 `chrome://extensions` 并开启“开发者模式”。
+3. 点击“加载已解压的扩展程序”，选择 `chrome-extension/`。
+4. 打开有声音的网页，点击扩展并开始转写。
+
+弹窗关闭后，后台 offscreen document 会继续采集和转写。完整说明见 [`chrome-extension/README.md`](./chrome-extension/README.md)。
 
 ## 识别模式
 

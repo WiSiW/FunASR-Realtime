@@ -1,0 +1,29 @@
+{
+  "manifest_version": 3,
+  "name": "FunASR Realtime Capture",
+  "version": "0.1.0",
+  "description": "Capture audio from the active Chrome tab and transcribe it with a FunASR Realtime backend.",
+  "minimum_chrome_version": "116",
+  "permissions": [
+    "activeTab",
+    "offscreen",
+    "storage",
+    "tabCapture"
+  ],
+  "host_permissions": [
+    "http://127.0.0.1/*",
+    "http://localhost/*"
+  ],
+  "background": {
+    "service_worker": "src/background.js",
+    "type": "module"
+  },
+  "action": {
+    "default_title": "FunASR Realtime Capture",
+    "default_popup": "popup/popup.html"
+  },
+  "options_page": "options/options.html",
+  "content_security_policy": {
+    "extension_pages": "script-src 'self'; object-src 'self'; connect-src 'self' ws://*:* wss://*:* http://*:* https://*:*;"
+  }
+}

@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>FunASR Capture</title>
+    <link rel="stylesheet" href="./popup.css" />
+  </head>
+  <body>
+    <div class="popup">
+      <header class="app-header">
+        <div class="brand-mark" aria-hidden="true">FR</div>
+        <div class="app-title">
+          <h1>标签页转写</h1>
+          <p id="tabTitle">正在读取当前页面</p>
+        </div>
+        <span id="statusPill" class="status-pill">待机</span>
+      </header>
+
+      <main class="app-body">
+        <section class="settings-panel">
+          <label class="field">
+            <span class="field-label">
+              <span>后端 WebSocket</span>
+              <button id="openOptionsButton" type="button">本地网络授权</button>
+            </span>
+            <input
+              id="serverUrl"
+              type="text"
+              spellcheck="false"
+              autocomplete="off"
+              placeholder="ws://127.0.0.1:8000/api/v1/asr/stream"
+            />
+          </label>
+
+          <div class="field">
+            <span>识别模式</span>
+            <div id="modeGroup" class="mode-group" role="radiogroup">
+              <button type="button" data-mode="auto">自动</button>
+              <button type="button" data-mode="stream">流式</button>
+              <button type="button" data-mode="push">停止后识别</button>
+            </div>
+          </div>
+
+          <details class="advanced">
+            <summary>高级设置</summary>
+            <label class="check-row">
+              <span>
+                说话人识别
+                <small>每次采集独立编号</small>
+              </span>
+              <input id="speakerEnabled" type="checkbox" />
+            </label>
+            <label class="range-row">
+              <span>能量阈值</span>
+              <input
+                id="energyThreshold"
+                type="range"
+                min="0.002"
+                max="0.08"
+                step="0.001"
+              />
+              <output id="energyValue">0.012</output>
+            </label>
+          </details>
+        </section>
+
+        <section class="capture-panel">
+          <div id="levelMeter" class="level-meter" aria-hidden="true"></div>
+          <button id="captureButton" class="capture-button" type="button">
+            <span class="capture-glyph" aria-hidden="true"></span>
+            <span id="captureLabel">开始转写</span>
+          </button>
+          <p id="errorMessage" class="error-message" role="alert" hidden></p>
+        </section>
+
+        <section class="transcript-panel">
+          <div class="transcript-header">
+            <div>
+              <h2>转写文本</h2>
+              <span id="segmentCount">0 段</span>
+            </div>
+            <div class="transcript-actions">
+              <button id="copyButton" type="button">复制</button>
+              <button id="clearButton" type="button">清空</button>
+            </div>
+          </div>
+          <div id="transcriptBody" class="transcript-body">
+            <p class="empty-state">打开需要转写的标签页并开始采集</p>
+          </div>
+        </section>
+      </main>
+    </div>
+
+    <script type="module" src="./popup.js"></script>
+  </body>
+</html>

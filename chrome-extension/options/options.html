@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>FunASR Capture 连接设置</title>
+    <link rel="stylesheet" href="./options.css" />
+  </head>
+  <body>
+    <main>
+      <header>
+        <div class="brand-mark" aria-hidden="true">FR</div>
+        <div>
+          <h1>连接设置</h1>
+          <p>授权扩展访问本机 FunASR 服务</p>
+        </div>
+      </header>
+
+      <section>
+        <label for="serverUrl">后端地址</label>
+        <input
+          id="serverUrl"
+          type="text"
+          spellcheck="false"
+          autocomplete="off"
+        />
+        <button id="authorizeButton" type="button">授权并检测连接</button>
+        <p id="statusMessage" role="status">等待检测</p>
+      </section>
+
+      <aside>
+        首次使用新版 Chrome 时，需要允许扩展访问本地网络。点击上方按钮并在浏览器提示中选择“允许”。
+      </aside>
+    </main>
+
+    <script type="module" src="./options.js"></script>
+  </body>
+</html>

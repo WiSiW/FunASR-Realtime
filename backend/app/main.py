@@ -7,9 +7,9 @@ import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 from backend.app.api.routes import asr, speakers, system
@@ -93,6 +93,51 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.middleware("http")
+async def allow_browser_extension_local_network_access(
+    request: Request,
+    call_next,
+):
+    """Allow extension clients to pass Chromium private-network preflights."""
+    origin = request.headers.get("origin", "")
+    is_extension_origin = origin.startswith(
+        ("chrome-extension://", "moz-extension://")
+    )
+    private_network_request = (
+        request.headers.get("access-control-request-private-network", "").lower()
+        == "true"
+    )
+
+    if (
+        is_extension_origin
+        and request.method == "OPTIONS"
+        and private_network_request
+    ):
+        requested_headers = request.headers.get(
+            "access-control-request-headers",
+            "*",
+        )
+        return Response(
+            status_code=204,
+            headers={
+                "Access-Control-Allow-Origin": origin,
+                "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+                "Access-Control-Allow-Headers": requested_headers,
+                "Access-Control-Allow-Private-Network": "true",
+                "Access-Control-Max-Age": "600",
+                "Vary": "Origin",
+            },
+        )
+
+    response = await call_next(request)
+    if is_extension_origin:
+        response.headers["Access-Control-Allow-Origin"] = origin
+        response.headers["Access-Control-Allow-Private-Network"] = "true"
+        response.headers["Vary"] = "Origin"
+    return response
+
 
 app.include_router(system.router, prefix=settings.api_prefix)
 app.include_router(asr.router, prefix=settings.api_prefix)

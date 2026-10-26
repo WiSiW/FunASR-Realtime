@@ -1,6 +1,6 @@
 {
   "manifest_version": 3,
-  "name": "FunASR Realtime Capture",
+  "name": "语音中转写",
   "version": "0.1.0",
   "description": "Capture audio from the active Chrome tab and transcribe it with a FunASR Realtime backend.",
   "minimum_chrome_version": "116",

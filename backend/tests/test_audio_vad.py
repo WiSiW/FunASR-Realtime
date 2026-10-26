@@ -85,3 +85,24 @@ def test_pre_roll_keeps_audio_before_threshold_crossing() -> None:
     assert started.speech_started is True
     assert ended.utterance is not None
     assert ended.utterance.size == 6400
+
+def test_utterance_reports_sample_bounds_in_original_stream() -> None:
+    vad = EnergyVAD(
+        16000,
+        0.02,
+        0.2,
+        0.1,
+        2.0,
+        pre_roll_sec=0.1,
+    )
+
+    vad.accept(block(0.0))
+    vad.accept(block(0.0))
+    started = vad.accept(block(0.1))
+    vad.accept(block(0.0))
+    ended = vad.accept(block(0.0))
+
+    assert started.speech_started is True
+    assert ended.utterance is not None
+    assert ended.utterance_start_sample == 1600
+    assert ended.utterance_end_sample == 8000

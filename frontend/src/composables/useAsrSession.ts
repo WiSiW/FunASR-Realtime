@@ -1,7 +1,18 @@
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { AsrSocketClient } from '../services/asrSocket'
+import {
+  TARGET_SAMPLE_RATE,
+  canFastDecodeFile,
+  decodeMediaFile,
+  probeMediaFile,
+  readPcmChunk,
+  streamMediaFile,
+} from '../services/mediaAudio'
+import type { DecodedMediaAudio } from '../services/mediaAudio'
 import { useMicrophone } from './useMicrophone'
 import type {
+  CaptureSource,
+  FileRecognitionPhase,
   RecognitionMode,
   ServerMessage,
   SessionState,
@@ -12,8 +23,11 @@ import type {
 const WS_PATH = '/api/v1/asr/stream'
 const RECONNECT_DELAYS_MS = [800, 1600, 3200, 6400, 10_000, 15_000]
 const SPEAKER_ENABLED_STORAGE_KEY = 'funasr.speakerEnabled'
+const FILE_CHUNK_SAMPLES = 3200
+const FILE_PACING_FACTOR = 8
 
 export function useAsrSession() {
+  const source = ref<CaptureSource>('microphone')
   const mode = ref<RecognitionMode>('auto')
   const state = ref<SessionState>('idle')
   const level = ref(0)
@@ -25,6 +39,10 @@ export function useAsrSession() {
     window.localStorage.getItem(SPEAKER_ENABLED_STORAGE_KEY) !== 'false',
   )
   const sessionAudioId = ref('')
+  const audioFileName = ref('')
+  const fileProgress = ref(0)
+  const filePhase = ref<FileRecognitionPhase>('idle')
+  const fileDurationSec = ref(0)
 
   watch(speakerEnabled, (enabled) => {
     window.localStorage.setItem(SPEAKER_ENABLED_STORAGE_KEY, String(enabled))
@@ -33,20 +51,31 @@ export function useAsrSession() {
   const client = new AsrSocketClient()
   const microphone = useMicrophone()
 
+  let recognitionSource: CaptureSource = 'microphone'
   let recordingIntent = false
   let sessionReady = false
   let reconnecting = false
   let reconnectGeneration = 0
   let reconnectTimer: number | null = null
   let resolveReconnectWait: (() => void) | null = null
+  let fileOperationId = 0
+  let fileAbortController: AbortController | null = null
 
   const active = computed(() =>
-    ['initializing', 'listening', 'speech', 'processing', 'reconnecting'].includes(
-      state.value,
-    ),
+    [
+      'initializing',
+      'decoding',
+      'uploading',
+      'listening',
+      'speech',
+      'processing',
+      'reconnecting',
+    ].includes(state.value),
   )
   const busy = computed(() =>
-    ['connecting', 'initializing', 'processing', 'stopping'].includes(state.value),
+    ['connecting', 'initializing', 'decoding', 'uploading', 'processing', 'stopping'].includes(
+      state.value,
+    ),
   )
 
   client.onEvent(handleServerEvent)
@@ -56,13 +85,17 @@ export function useAsrSession() {
     if (reconnecting) {
       return
     }
-    if (recordingIntent && wasReady) {
+    if (recordingIntent && wasReady && recognitionSource === 'microphone') {
       void recoverConnection(closeError)
       return
     }
     if (active.value || busy.value) {
       state.value = 'error'
       error.value = closeError.message
+      if (recognitionSource === 'file') {
+        filePhase.value = 'error'
+        fileAbortController?.abort()
+      }
       void microphone.stop()
     }
   })
@@ -112,8 +145,11 @@ export function useAsrSession() {
             text,
             final: true,
             createdAt: Date.now(),
+            sessionId: String(data.session_id || '') || undefined,
+            audioFileName: audioFileName.value || undefined,
             latencyMs: Number(data.latency_ms || 0) || undefined,
-            audioId: String(data.audio_id || '') || undefined,
+            startTimeMs: optionalNumber(data.start_time_ms),
+            endTimeMs: optionalNumber(data.end_time_ms),
             speakerId: String(data.speaker_id || '') || undefined,
             speakerName: String(data.speaker_name || '') || undefined,
             speakerConfidence: Number(data.speaker_confidence || 0) || undefined,
@@ -145,6 +181,10 @@ export function useAsrSession() {
           reconnectGeneration += 1
           cancelReconnectWait()
           state.value = 'error'
+          if (recognitionSource === 'file') {
+            filePhase.value = 'error'
+            fileAbortController?.abort()
+          }
           void microphone.stop()
           client.disconnect()
         }
@@ -157,12 +197,17 @@ export function useAsrSession() {
     if (active.value || busy.value) {
       return
     }
+    recognitionSource = 'microphone'
+    audioFileName.value = '麦克风录音'
     recordingIntent = true
     sessionReady = false
     reconnecting = false
     reconnectGeneration += 1
     error.value = ''
     partial.value = null
+    fileProgress.value = 0
+    fileDurationSec.value = 0
+    filePhase.value = 'idle'
     state.value = 'connecting'
 
     try {
@@ -176,7 +221,162 @@ export function useAsrSession() {
     }
   }
 
+  async function startFile(file: File): Promise<void> {
+    if (active.value || busy.value) {
+      return
+    }
+
+    const operationId = ++fileOperationId
+    const controller = new AbortController()
+    fileAbortController = controller
+    recognitionSource = 'file'
+    audioFileName.value = file.name
+    recordingIntent = true
+    sessionReady = false
+    reconnecting = false
+    reconnectGeneration += 1
+    error.value = ''
+    partial.value = null
+    fileProgress.value = 0
+    fileDurationSec.value = 0
+    filePhase.value = 'decoding'
+    state.value = 'decoding'
+
+    let decoded: DecodedMediaAudio | null = null
+    let decodeError: unknown = null
+    const isCurrent = (): boolean =>
+      fileOperationId === operationId && recordingIntent && !controller.signal.aborted
+
+    try {
+      try {
+        const durationSec = await probeMediaFile(file, controller.signal)
+        fileDurationSec.value = durationSec
+        if (canFastDecodeFile(file, durationSec)) {
+          decoded = await decodeMediaFile(file)
+        }
+      } catch (cause) {
+        decodeError = cause
+      }
+      if (!isCurrent()) return
+
+      state.value = 'connecting'
+      await client.connect(resolveWebSocketUrl())
+      if (!isCurrent()) {
+        client.disconnect()
+        return
+      }
+
+      state.value = 'initializing'
+      await client.start(buildStartOptions('auto'))
+      if (!isCurrent()) {
+        client.disconnect()
+        return
+      }
+
+      sessionReady = true
+      filePhase.value = decoded ? 'uploading' : 'streaming'
+      state.value = 'uploading'
+
+      if (decoded) {
+        fileDurationSec.value = decoded.buffer.duration
+        const completed = await sendDecodedAudio(decoded.buffer, operationId)
+        if (!completed || !isCurrent()) return
+      } else {
+        // Long files and containers that decodeAudioData cannot demux use the
+        // media element path to avoid allocating hundreds of MB of PCM memory.
+        await streamMediaFile(file, {
+          signal: controller.signal,
+          onChunk: (chunk) => {
+            if (!isCurrent()) return
+            level.value = chunk.level
+            client.sendAudio(chunk.pcm)
+          },
+          onDuration: (duration) => {
+            if (duration > 0) fileDurationSec.value = duration
+          },
+          onProgress: (progress) => {
+            fileProgress.value = Math.min(99.5, Math.max(0, progress * 100))
+          },
+        })
+        if (!isCurrent()) return
+      }
+
+      fileProgress.value = 100
+      filePhase.value = 'finishing'
+      state.value = 'processing'
+      await client.stop()
+      client.disconnect()
+      sessionReady = false
+      recordingIntent = false
+      state.value = 'idle'
+      filePhase.value = 'done'
+      level.value = 0
+      partial.value = null
+    } catch (cause) {
+      if (fileOperationId !== operationId) {
+        return
+      }
+
+      recordingIntent = false
+      sessionReady = false
+      reconnectGeneration += 1
+      cancelReconnectWait()
+      client.disconnect()
+      level.value = 0
+
+      state.value = 'error'
+      filePhase.value = 'error'
+      error.value = normalizeFileError(cause, decodeError)
+      partial.value = null
+    } finally {
+      if (decoded) {
+        await decoded.close()
+      }
+      if (fileAbortController === controller) {
+        fileAbortController = null
+      }
+    }
+  }
+
+  async function sendDecodedAudio(
+    buffer: AudioBuffer,
+    operationId: number,
+  ): Promise<boolean> {
+    const startedAt = performance.now()
+    let sentSamples = 0
+
+    for (let start = 0; start < buffer.length; start += FILE_CHUNK_SAMPLES) {
+      if (fileOperationId !== operationId || !recordingIntent) {
+        return false
+      }
+
+      const chunk = readPcmChunk(buffer, start, FILE_CHUNK_SAMPLES)
+      if (chunk.pcm.length > 0) {
+        level.value = chunk.level
+        client.sendAudio(chunk.pcm)
+        sentSamples += chunk.pcm.length
+        fileProgress.value = Math.min(
+          99.5,
+          (sentSamples / Math.max(1, buffer.length)) * 100,
+        )
+      }
+
+      const targetElapsedMs =
+        (sentSamples / TARGET_SAMPLE_RATE / FILE_PACING_FACTOR) * 1000
+      const waitMs = targetElapsedMs - (performance.now() - startedAt)
+      if (waitMs > 1) {
+        await delay(waitMs)
+      }
+    }
+
+    return true
+  }
+
   async function stop(): Promise<void> {
+    if (recognitionSource === 'file') {
+      cancelFile()
+      return
+    }
     if (!recordingIntent && !active.value && state.value !== 'reconnecting') {
       return
     }
@@ -213,6 +413,27 @@ export function useAsrSession() {
     }
   }
 
+  function cancelFile(): void {
+    if (recognitionSource !== 'file' || (!active.value && !busy.value)) {
+      return
+    }
+
+    fileOperationId += 1
+    recordingIntent = false
+    sessionReady = false
+    reconnectGeneration += 1
+    cancelReconnectWait()
+    fileAbortController?.abort()
+    fileAbortController = null
+    state.value = 'stopping'
+    client.disconnect()
+    state.value = 'idle'
+    filePhase.value = 'cancelled'
+    fileProgress.value = 0
+    level.value = 0
+    partial.value = null
+  }
+
   async function connectAndStart(): Promise<void> {
     await client.connect(resolveWebSocketUrl())
     state.value = 'initializing'
@@ -231,7 +452,7 @@ export function useAsrSession() {
   }
 
   async function recoverConnection(cause: Error): Promise<void> {
-    if (reconnecting || !recordingIntent) {
+    if (reconnecting || !recordingIntent || recognitionSource !== 'microphone') {
       return
     }
 
@@ -293,9 +514,9 @@ export function useAsrSession() {
     }
   }
 
-  function buildStartOptions(): StartSessionOptions {
+  function buildStartOptions(recognitionMode: RecognitionMode = mode.value): StartSessionOptions {
     return {
-      mode: mode.value,
+      mode: recognitionMode,
       sample_rate: 16000,
       channels: 1,
       audio_format: 'pcm_s16le',
@@ -348,6 +569,9 @@ export function useAsrSession() {
   }
 
   function disconnect(): void {
+    fileOperationId += 1
+    fileAbortController?.abort()
+    fileAbortController = null
     recordingIntent = false
     sessionReady = false
     reconnectGeneration += 1
@@ -359,6 +583,7 @@ export function useAsrSession() {
   onBeforeUnmount(disconnect)
 
   return {
+    source,
     mode,
     state,
     level,
@@ -368,11 +593,17 @@ export function useAsrSession() {
     energyThreshold,
     speakerEnabled,
     sessionAudioId,
+    audioFileName,
+    fileProgress,
+    filePhase,
+    fileDurationSec,
     active,
     busy,
     capturing: microphone.capturing,
     start,
     stop,
+    startFile,
+    cancelFile,
     clear,
   }
 }
@@ -384,4 +615,24 @@ function resolveWebSocketUrl(): string {
   }
   const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
   return `${protocol}//${window.location.host}${WS_PATH}`
+}
+
+function normalizeFileError(cause: unknown, decodeError: unknown): string {
+  const message = cause instanceof Error ? cause.message : String(cause)
+  if (message) return message
+  if (decodeError instanceof Error && decodeError.message) {
+    return decodeError.message
+  }
+  return '文件识别失败，请确认文件包含可播放的音轨'
+}
+
+
+function delay(delayMs: number): Promise<void> {
+  return new Promise((resolve) => window.setTimeout(resolve, delayMs))
+}
+
+function optionalNumber(value: unknown): number | undefined {
+  if (value === null || value === undefined || value === '') return undefined
+  const numeric = Number(value)
+  return Number.isFinite(numeric) ? numeric : undefined
 }

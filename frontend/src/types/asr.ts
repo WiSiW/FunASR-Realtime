@@ -1,9 +1,23 @@
 export type RecognitionMode = 'auto' | 'stream' | 'push'
 
+export type CaptureSource = 'microphone' | 'file'
+
+export type FileRecognitionPhase =
+  | 'idle'
+  | 'decoding'
+  | 'uploading'
+  | 'streaming'
+  | 'finishing'
+  | 'done'
+  | 'cancelled'
+  | 'error'
+
 export type SessionState =
   | 'idle'
   | 'connecting'
   | 'initializing'
+  | 'decoding'
+  | 'uploading'
   | 'listening'
   | 'speech'
   | 'processing'
@@ -45,8 +59,11 @@ export interface TranscriptSegment {
   text: string
   final: boolean
   createdAt: number
+  sessionId?: string
+  audioFileName?: string
   latencyMs?: number
-  audioId?: string
+  startTimeMs?: number
+  endTimeMs?: number
   speakerId?: string
   speakerName?: string
   speakerConfidence?: number

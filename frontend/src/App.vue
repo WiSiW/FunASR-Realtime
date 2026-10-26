@@ -1,12 +1,14 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import AudioMeter from './components/AudioMeter.vue'
+import FileUploadPanel from './components/FileUploadPanel.vue'
 import ModeSelector from './components/ModeSelector.vue'
 import SpeakerLibrary from './components/SpeakerLibrary.vue'
 import TranscriptPanel from './components/TranscriptPanel.vue'
 import { useAsrSession } from './composables/useAsrSession'
 
 const {
+  source,
   mode,
   state,
   level,
@@ -16,10 +18,16 @@ const {
   energyThreshold,
   speakerEnabled,
   sessionAudioId,
+  audioFileName,
+  fileProgress,
+  filePhase,
+  fileDurationSec,
   active,
   busy,
   start,
   stop,
+  startFile,
+  cancelFile,
   clear,
 } = useAsrSession()
 
@@ -28,6 +36,8 @@ const stateLabel = computed(() => {
     idle: '待机',
     connecting: '连接中',
     initializing: '加载模型',
+    decoding: '解析文件',
+    uploading: '发送音频',
     listening: '聆听中',
     speech: '检测到语音',
     processing: '识别中',
@@ -52,6 +62,10 @@ const actionLabel = computed(() => {
 function audioUrl(audioId: string): string {
   return `/api/v1/asr/audio/${encodeURIComponent(audioId)}`
 }
+
+function startSelectedFile(file: File): void {
+  void startFile(file)
+}
 </script>
 
 <template>
@@ -68,8 +82,8 @@ function audioUrl(audioId: string): string {
       </div>
       <div>
         <span class="eyebrow">FUNASR · REALTIME</span>
-        <h1>浏览器实时语音识别</h1>
-        <p>麦克风音频通过 WebSocket 持续传输，识别过程保留在本机后端。</p>
+        <h1>浏览器语音识别工作台</h1>
+        <p>麦克风实时识别，或上传音频、视频文件提取音轨后识别。</p>
       </div>
       <div class="connection-pill" :class="{ online: active }">
         <span class="connection-pill__dot" />
@@ -81,34 +95,79 @@ function audioUrl(audioId: string): string {
       <section class="control-card">
         <div class="control-card__heading">
           <div>
-            <span class="eyebrow">01 · MODE</span>
-            <h2>选择识别模式</h2>
+            <span class="eyebrow">01 · SOURCE</span>
+            <h2>选择输入方式</h2>
           </div>
           <span class="format-badge">16 kHz · PCM</span>
         </div>
 
-        <ModeSelector v-model="mode" :disabled="active || busy" />
-
-        <div class="capture-panel">
-          <div class="capture-panel__visual">
-            <AudioMeter :level="level" :active="active" />
-            <div class="capture-panel__meta">
-              <span>{{ active ? '输入电平' : '等待麦克风' }}</span>
-              <strong>{{ Math.round(Math.min(level, 1) * 100) }}%</strong>
-            </div>
-          </div>
-
+        <div class="source-tabs" role="tablist" aria-label="输入方式">
           <button
-            class="primary-action"
-            :class="{ stop: active }"
+            class="source-tab"
+            :class="{ selected: source === 'microphone' }"
             type="button"
-            :disabled="busy"
-            @click="active ? stop() : start()"
+            role="tab"
+            :aria-selected="source === 'microphone'"
+            :disabled="active || busy"
+            @click="source = 'microphone'"
           >
-            <span class="primary-action__icon" aria-hidden="true" />
-            {{ actionLabel }}
+            <span>麦克风</span>
+            <small>实时采集</small>
+          </button>
+          <button
+            class="source-tab"
+            :class="{ selected: source === 'file' }"
+            type="button"
+            role="tab"
+            :aria-selected="source === 'file'"
+            :disabled="active || busy"
+            @click="source = 'file'"
+          >
+            <span>音视频文件</span>
+            <small>本地上传</small>
           </button>
         </div>
+
+        <template v-if="source === 'microphone'">
+          <ModeSelector v-model="mode" :disabled="active || busy" />
+
+          <div class="capture-panel">
+            <div class="capture-panel__visual">
+              <AudioMeter :level="level" :active="active" />
+              <div class="capture-panel__meta">
+                <span>{{ active ? '输入电平' : '等待麦克风' }}</span>
+                <strong>{{ Math.round(Math.min(level, 1) * 100) }}%</strong>
+              </div>
+            </div>
+
+            <button
+              class="primary-action"
+              :class="{ stop: active }"
+              type="button"
+              :disabled="busy"
+              @click="active ? stop() : start()"
+            >
+              <span class="primary-action__icon" aria-hidden="true" />
+              {{ actionLabel }}
+            </button>
+          </div>
+        </template>
+
+        <template v-else>
+          <div class="file-mode-note">
+            <span>文件识别</span>
+            <p>自动检测停顿并分段，适合会议录音、访谈和视频内容。</p>
+          </div>
+          <FileUploadPanel
+            :active="active"
+            :disabled="active || busy"
+            :progress="fileProgress"
+            :phase="filePhase"
+            :duration-sec="fileDurationSec"
+            @start="startSelectedFile"
+            @cancel="cancelFile"
+          />
+        </template>
 
         <details class="advanced-panel">
           <summary>识别设置</summary>
@@ -154,7 +213,7 @@ function audioUrl(audioId: string): string {
         <SpeakerLibrary :disabled="active || busy" />
 
         <div v-if="sessionAudioId && !active && !busy" class="session-audio">
-          <span>本次录音回放</span>
+          <span>本次识别音频回放</span>
           <audio controls preload="none" :src="audioUrl(sessionAudioId)" />
         </div>
 
@@ -165,14 +224,17 @@ function audioUrl(audioId: string): string {
         :finals="finals"
         :partial="partial"
         :state="state"
+        :source="source"
         :speaker-enabled="speakerEnabled"
+        :session-audio-id="sessionAudioId"
+        :audio-file-name="audioFileName"
         @clear="clear"
       />
     </main>
 
     <footer>
       <span>音频仅发送到当前后端服务</span>
-      <span>生产环境请使用 HTTPS，以启用浏览器麦克风权限</span>
+      <span>音视频文件在浏览器本地提取音轨，无需上传原始视频</span>
     </footer>
   </div>
 </template>

@@ -148,7 +148,9 @@ def test_streaming_websocket_session() -> None:
                 final = next(item for item in events if item["type"] == "final")
                 assert final["data"]["text"] == "你好世界"
                 assert final["data"]["speaker_id"] == "speaker_01"
-                assert final["data"]["audio_id"]
+                assert final["data"]["start_time_ms"] == 0
+                assert final["data"]["end_time_ms"] == 200
+                assert "audio_id" not in final["data"]
 
                 websocket.send_json({"type": "stop", "request_id": "stop-1"})
                 stopped = websocket.receive_json()
@@ -252,7 +254,9 @@ def test_auto_websocket_includes_speaker_id() -> None:
                     if event["type"] == "final":
                         final = event
                 assert final["data"]["speaker_id"] == "speaker_01"
-                assert final["data"]["audio_id"]
+                assert final["data"]["start_time_ms"] == 0
+                assert final["data"]["end_time_ms"] == 200
+                assert "audio_id" not in final["data"]
         finally:
             app.state.models = original_registry
 
@@ -301,6 +305,9 @@ def test_auto_websocket_applies_postprocess_and_sentence_split() -> None:
                     "然后明天继续。",
                 ]
                 assert all("speaker_id" not in item["data"] for item in finals)
+                assert all(item["data"]["start_time_ms"] == 0 for item in finals)
+                assert all(item["data"]["end_time_ms"] == 200 for item in finals)
+                assert all("audio_id" not in item["data"] for item in finals)
         finally:
             app.state.models = original_registry
 
@@ -359,5 +366,51 @@ def test_ping_responds_while_offline_model_is_busy() -> None:
                 release_timer.cancel()
                 while websocket.receive_json()["type"] != "final":
                     pass
+        finally:
+            app.state.models = original_registry
+
+def test_push_websocket_returns_original_audio_timing() -> None:
+    with TestClient(app) as client:
+        original_registry = app.state.models
+        app.state.models = FakeModelRegistry()
+        try:
+            with client.websocket_connect("/api/v1/asr/stream") as websocket:
+                assert websocket.receive_json()["type"] == "connected"
+                websocket.send_json(
+                    {
+                        "type": "start",
+                        "request_id": "start-push",
+                        "data": {
+                            "mode": "push",
+                            "vad": {
+                                "energy_threshold": 0.02,
+                                "hangover_sec": 0.1,
+                                "min_speech_sec": 0.1,
+                                "max_speech_sec": 2,
+                            },
+                            "speaker": {"enabled": False},
+                        },
+                    }
+                )
+                assert websocket.receive_json()["type"] == "ready"
+                assert websocket.receive_json()["data"]["state"] == "listening"
+
+                websocket.send_bytes(pcm_block(12000))
+                websocket.send_bytes(pcm_block(0))
+                websocket.send_json({"type": "stop", "request_id": "stop-push"})
+
+                final = None
+                stopped = None
+                while stopped is None:
+                    event = websocket.receive_json()
+                    if event["type"] == "final":
+                        final = event
+                    elif event["type"] == "stopped":
+                        stopped = event
+
+                assert final is not None
+                assert final["data"]["start_time_ms"] == 0
+                assert final["data"]["end_time_ms"] == 200
+                assert "audio_id" not in final["data"]
         finally:
             app.state.models = original_registry

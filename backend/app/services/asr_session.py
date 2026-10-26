@@ -267,7 +267,11 @@ class RecognitionSession:
 
         if self.mode is RecognitionMode.AUTO:
             if update.utterance is not None:
-                await self._transcribe_offline(update.utterance)
+                await self._transcribe_offline(
+                    update.utterance,
+                    start_sample=update.utterance_start_sample,
+                    end_sample=update.utterance_end_sample,
+                )
             elif update.speech_ended:
                 await self._send_status("listening")
             return
@@ -298,7 +302,11 @@ class RecognitionSession:
         elif self.mode is RecognitionMode.AUTO:
             pending = self.vad.flush()
             if pending is not None:
-                await self._transcribe_offline(pending)
+                await self._transcribe_offline(
+                    pending,
+                    start_sample=self.vad.last_utterance_start_sample,
+                    end_sample=self.vad.last_utterance_end_sample,
+                )
         else:
             await self._finish_streaming(flush_vad=True)
 
@@ -364,16 +372,13 @@ class RecognitionSession:
     def _clear_stream_pre_roll(self) -> None:
         self._stream_pre_roll = np.zeros(0, dtype=np.float32)
 
-    async def _transcribe_offline(self, audio: np.ndarray) -> None:
-        audio_id: str | None = None
-        if self.audio_store is not None:
-            audio_id = uuid.uuid4().hex
-            await asyncio.to_thread(
-                self.audio_store.put_segment,
-                audio_id,
-                audio,
-                self.options.sample_rate if self.options is not None else 16000,
-            )
+    async def _transcribe_offline(
+        self,
+        audio: np.ndarray,
+        *,
+        start_sample: int | None = None,
+        end_sample: int | None = None,
+    ) -> None:
         await self._send_status("processing")
         started = time.time()
 
@@ -399,13 +404,20 @@ class RecognitionSession:
                 "session_id": self.session_id,
                 "segment_id": f"seg-{self._segment_index:04d}",
                 "text": sentence,
-                "duration_ms": round(audio.size / 16000 * 1000),
+                "duration_ms": round(
+                    audio.size
+                    / (
+                        self.options.sample_rate
+                        if self.options is not None
+                        else 16000
+                    )
+                    * 1000
+                ),
                 "latency_ms": elapsed_ms,
                 "sentence_index": index,
                 "sentence_count": sentence_count,
             }
-            if audio_id is not None:
-                data["audio_id"] = audio_id
+            data.update(self._timing_event_fields(start_sample, end_sample))
             data.update(self._speaker_event_fields(assignment))
             await self._send(event("final", data=data))
         await self._send_status("listening")
@@ -479,6 +491,24 @@ class RecognitionSession:
                 await task
         self._speaker_ready = False
 
+    def _timing_event_fields(
+        self,
+        start_sample: int | None,
+        end_sample: int | None,
+    ) -> dict[str, int]:
+        if (
+            self.options is None
+            or start_sample is None
+            or end_sample is None
+            or end_sample < start_sample
+        ):
+            return {}
+        sample_rate = self.options.sample_rate
+        return {
+            "start_time_ms": round(start_sample / sample_rate * 1000),
+            "end_time_ms": round(end_sample / sample_rate * 1000),
+        }
+
     @staticmethod
     def _speaker_event_fields(
         assignment: SpeakerAssignment | None,
@@ -503,25 +533,41 @@ class RecognitionSession:
         if audio.size == 0:
             return
 
-        # Push mode buffers raw audio.  Re-run the configured VAD so multi-
+        # Push mode buffers raw audio. Re-run the configured VAD so multi-
         # speaker recordings become separate utterances with their own labels.
-        utterances: list[np.ndarray] = []
+        utterances: list[tuple[np.ndarray, int | None, int | None]] = []
         block_size = max(1, int(0.16 * self.options.sample_rate))
         for start in range(0, audio.size, block_size):
             update = self.vad.accept(audio[start : start + block_size]) if self.vad else None
             if update is not None and update.utterance is not None:
-                utterances.append(update.utterance)
+                utterances.append(
+                    (
+                        update.utterance,
+                        update.utterance_start_sample,
+                        update.utterance_end_sample,
+                    )
+                )
         if self.vad is not None:
             pending = self.vad.flush()
             if pending is not None:
-                utterances.append(pending)
+                utterances.append(
+                    (
+                        pending,
+                        self.vad.last_utterance_start_sample,
+                        self.vad.last_utterance_end_sample,
+                    )
+                )
 
         if not utterances:
-            utterances = [audio]
-        for utterance in utterances:
+            utterances = [(audio, 0, audio.size)]
+        for utterance, start_sample, end_sample in utterances:
             if not self.active:
                 return
-            await self._transcribe_offline(utterance)
+            await self._transcribe_offline(
+                utterance,
+                start_sample=start_sample,
+                end_sample=end_sample,
+            )
 
     async def _feed_streaming(self, audio: np.ndarray, update) -> None:
         if self.streaming is None:
@@ -553,12 +599,16 @@ class RecognitionSession:
             await self._finish_streaming(
                 flush_vad=False,
                 utterance=update.utterance,
+                start_sample=update.utterance_start_sample,
+                end_sample=update.utterance_end_sample,
             )
 
     async def _finish_streaming(
         self,
         flush_vad: bool,
         utterance: np.ndarray | None = None,
+        start_sample: int | None = None,
+        end_sample: int | None = None,
     ) -> None:
         if self.options is None or self.vad is None or self.streaming is None:
             return
@@ -566,6 +616,8 @@ class RecognitionSession:
         # utterance; feeding it again here would duplicate recognition.
         if flush_vad:
             utterance = self.vad.flush()
+            start_sample = self.vad.last_utterance_start_sample
+            end_sample = self.vad.last_utterance_end_sample
 
         await self._wait_speaker_task()
         speaker_audio = (
@@ -586,15 +638,6 @@ class RecognitionSession:
             self._partial_text = merge_stream_text(self._partial_text, piece)
         text = self._partial_text.strip()
         if text:
-            audio_id: str | None = None
-            if self.audio_store is not None and speaker_audio.size > 0:
-                audio_id = uuid.uuid4().hex
-                await asyncio.to_thread(
-                    self.audio_store.put_segment,
-                    audio_id,
-                    speaker_audio,
-                    self.options.sample_rate,
-                )
             if assignment is not None:
                 self._stream_speaker_id = assignment.speaker_id
             sentences = self._postprocess_sentences(text)
@@ -608,12 +651,11 @@ class RecognitionSession:
                     "sentence_index": index,
                     "sentence_count": sentence_count,
                 }
+                data.update(self._timing_event_fields(start_sample, end_sample))
                 if assignment is not None:
                     data.update(self._speaker_event_fields(assignment))
                 elif self.speaker_tracker is not None and self._stream_speaker_id is not None:
                     data["speaker_id"] = self._stream_speaker_id
-                if audio_id is not None:
-                    data["audio_id"] = audio_id
                 await self._send(event("final", data=data))
         self._partial_text = ""
         await self._reset_stream_speaker_state()

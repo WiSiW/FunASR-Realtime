@@ -9,7 +9,7 @@ import numpy as np
 
 
 def rms_energy(audio: np.ndarray) -> float:
-    """Return a stable RMS value for a float32 audio block."""
+    """Return a stable RMS energy for a float32 audio block."""
     if audio.size == 0:
         return 0.0
     samples = audio.astype(np.float32, copy=False)
@@ -23,6 +23,8 @@ class VADUpdate:
     speech_started: bool = False
     speech_ended: bool = False
     utterance: np.ndarray | None = None
+    utterance_start_sample: int | None = None
+    utterance_end_sample: int | None = None
 
 
 class EnergyVAD:
@@ -46,11 +48,15 @@ class EnergyVAD:
 
         self._in_speech = False
         self._blocks: list[np.ndarray] = []
-        self._pre_roll_blocks: deque[np.ndarray] = deque()
+        self._pre_roll_blocks: deque[tuple[int, np.ndarray]] = deque()
         self._pre_roll_count = 0
         self._speech_samples = 0
         self._sample_count = 0
         self._silence_samples = 0
+        self._total_samples = 0
+        self._utterance_start_sample = 0
+        self.last_utterance_start_sample: int | None = None
+        self.last_utterance_end_sample: int | None = None
 
     @property
     def speaking(self) -> bool:
@@ -62,6 +68,8 @@ class EnergyVAD:
         if block.size == 0:
             return VADUpdate(energy=0.0, speaking=self._in_speech)
 
+        block_start = self._total_samples
+        self._total_samples += block.size
         energy = rms_energy(block)
         speech_started = False
         speech_ended = False
@@ -70,14 +78,21 @@ class EnergyVAD:
         if not self._in_speech:
             if energy >= self.energy_threshold:
                 self._in_speech = True
-                self._blocks = [*self._pre_roll_blocks, block.copy()]
+                self._utterance_start_sample = (
+                    self._pre_roll_blocks[0][0]
+                    if self._pre_roll_blocks
+                    else block_start
+                )
+                self._blocks = [
+                    item[1] for item in self._pre_roll_blocks
+                ] + [block.copy()]
                 self._sample_count = sum(item.size for item in self._blocks)
                 self._speech_samples = block.size
                 self._silence_samples = 0
                 speech_started = True
                 self._clear_pre_roll()
             else:
-                self._append_pre_roll(block)
+                self._append_pre_roll(block, block_start)
             return VADUpdate(
                 energy=energy,
                 speaking=self._in_speech,
@@ -105,23 +120,41 @@ class EnergyVAD:
             speech_started=speech_started,
             speech_ended=speech_ended,
             utterance=utterance,
+            utterance_start_sample=(
+                self.last_utterance_start_sample
+                if utterance is not None
+                else None
+            ),
+            utterance_end_sample=(
+                self.last_utterance_end_sample
+                if utterance is not None
+                else None
+            ),
         )
 
     def flush(self) -> np.ndarray | None:
         """Finish an active utterance, used when the client stops recording."""
         if not self._in_speech:
+            self.last_utterance_start_sample = None
+            self.last_utterance_end_sample = None
             return None
         return self._finish_utterance(force=True)
 
     def _finish_utterance(self, force: bool = False) -> np.ndarray | None:
+        self.last_utterance_start_sample = None
+        self.last_utterance_end_sample = None
         if not self._blocks:
             self._reset()
             return None
 
         audio = np.concatenate(self._blocks).reshape(-1)
         has_enough_speech = self._speech_samples >= self.min_speech_samples
+        start_sample = self._utterance_start_sample
+        end_sample = self._total_samples
         self._reset()
         if force or has_enough_speech:
+            self.last_utterance_start_sample = start_sample
+            self.last_utterance_end_sample = end_sample
             return audio
         return None
 
@@ -132,17 +165,18 @@ class EnergyVAD:
         self._speech_samples = 0
         self._sample_count = 0
         self._silence_samples = 0
+        self._utterance_start_sample = 0
 
-    def _append_pre_roll(self, block: np.ndarray) -> None:
+    def _append_pre_roll(self, block: np.ndarray, start_sample: int) -> None:
         if self.pre_roll_samples <= 0:
             return
-        self._pre_roll_blocks.append(block.copy())
+        self._pre_roll_blocks.append((start_sample, block.copy()))
         self._pre_roll_count += block.size
         while (
             self._pre_roll_blocks
             and self._pre_roll_count > self.pre_roll_samples
         ):
-            removed = self._pre_roll_blocks.popleft()
+            _, removed = self._pre_roll_blocks.popleft()
             self._pre_roll_count -= removed.size
 
     def _clear_pre_roll(self) -> None:
